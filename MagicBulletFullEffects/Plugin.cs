@@ -1,8 +1,5 @@
 using Dalamud.Game.ClientState.Conditions;
-using Dalamud.Game.ClientState.Objects;
 using Dalamud.Game.Framework;
-using Dalamud.IoC;
-using Dalamud.IoC.ServiceInterface;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game;
@@ -19,7 +16,6 @@ public sealed class Plugin : IDalamudPlugin
 
     private readonly IFramework _framework;
     private readonly ICondition _condition;
-    private readonly ITargetManager _targetManager;
     private readonly IPluginLog _log;
 
     private bool _isActive;
@@ -28,15 +24,13 @@ public sealed class Plugin : IDalamudPlugin
     private byte _savedOther;
 
     public Plugin(
-        [RequiredVersion("1.0")] IDalamudPluginInterface pluginInterface,
-        [RequiredVersion("1.0")] IFramework framework,
-        [RequiredVersion("1.0")] ICondition condition,
-        [RequiredVersion("1.0")] ITargetManager targetManager,
-        [RequiredVersion("1.0")] IPluginLog log)
+        IDalamudPluginInterface pluginInterface,
+        IFramework framework,
+        ICondition condition,
+        IPluginLog log)
     {
         _framework = framework;
         _condition = condition;
-        _targetManager = targetManager;
         _log = log;
 
         _framework.Update += OnFrameworkUpdate;
