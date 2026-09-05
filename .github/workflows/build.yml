@@ -31,13 +31,16 @@ jobs:
 
       - name: Package
         run: |
-          $dllDir = "MagicBulletFullEffects\bin\Release\MagicBulletFullEffects"
-          if (-not (Test-Path $dllDir)) {
-            Write-Error "Output directory not found: $dllDir"
-            exit 1
-          }
-          Compress-Archive -Path "$dllDir\*" -DestinationPath latest.zip -Force
-          Get-ChildItem $dllDir -Name
+          $releaseDir = "MagicBulletFullEffects\bin\Release"
+          $dllPath = Join-Path $releaseDir "MagicBulletFullEffects.dll"
+          $jsonPath = Join-Path $releaseDir "MagicBulletFullEffects.json"
+          
+          if (-not (Test-Path $dllPath)) { Write-Error "DLL not found: $dllPath"; exit 1 }
+          if (-not (Test-Path $jsonPath)) { Write-Error "JSON not found: $jsonPath"; exit 1 }
+          
+          Write-Host "Packaging: $dllPath + $jsonPath"
+          Compress-Archive -Path $dllPath, $jsonPath -DestinationPath latest.zip -Force
+          Get-ChildItem latest.zip | ForEach-Object { "$($_.Name) - $($_.Length) bytes" }
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
