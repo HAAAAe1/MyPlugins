@@ -22,8 +22,6 @@ public sealed class Plugin : IDalamudPlugin
     private bool _isActive;
     private byte _savedPvpEnemy;
 
-    private byte _savedPvpEnemy;
-
     public Plugin()
     {
         Framework.Update += OnFrameworkUpdate;
