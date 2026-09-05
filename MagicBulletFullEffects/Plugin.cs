@@ -20,6 +20,7 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IPluginLog Log { get; private set; } = null!;
 
     private bool _isActive;
+    private byte _savedSelf;
     private byte _savedPvpEnemy;
 
     public Plugin()
@@ -84,9 +85,11 @@ public sealed class Plugin : IDalamudPlugin
         var uiState = UIState.Instance();
         if (uiState == null) return;
 
+        _savedSelf = uiState->BattleEffectSelf;
         _savedPvpEnemy = uiState->BattleEffectPvPEnemyPc;
+        uiState->BattleEffectSelf = 0;
         uiState->BattleEffectPvPEnemyPc = 0;
-        Log.Info("PvP特效已改为完全显示 (was {Old}, now 0)", _savedPvpEnemy);
+        Log.Info("特效已改为完全显示 (Self was {Old}, PvP was {OldPvp})", _savedSelf, _savedPvpEnemy);
     }
 
     private unsafe void RestoreEffects()
@@ -94,7 +97,8 @@ public sealed class Plugin : IDalamudPlugin
         var uiState = UIState.Instance();
         if (uiState == null) return;
 
+        uiState->BattleEffectSelf = _savedSelf;
         uiState->BattleEffectPvPEnemyPc = _savedPvpEnemy;
-        Log.Info("PvP特效已恢复为 {Value}", _savedPvpEnemy);
+        Log.Info("特效已恢复 (Self={Self}, PvP={Pvp})", _savedSelf, _savedPvpEnemy);
     }
 }
