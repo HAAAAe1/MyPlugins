@@ -1,0 +1,41 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      DALAMUD_HOME: /tmp/dalamud
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Download Dalamud
+        run: |
+          wget -q https://goatcorp.github.io/dalamud-distrib/latest.zip -O /tmp/dalamud.zip
+          mkdir -p ${{ env.DALAMUD_HOME }}
+          unzip -q /tmp/dalamud.zip -d ${{ env.DALAMUD_HOME }}
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --configuration Release -p:AssemblyVersion=${GITHUB_REF_NAME#v}
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: MagicBulletFullEffects/bin/latest.zip
+          generate_release_notes: true
