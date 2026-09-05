@@ -65,26 +65,23 @@ public sealed class Plugin : IDalamudPlugin
         var player = Control.GetLocalPlayer();
         if (player == null) return false;
 
-        var uiState = UIState.Instance();
-        if (uiState == null) return false;
+        var actionManager = ActionManager.Instance();
+        if (actionManager == null) return false;
 
         // 检查是否正在施放魔弹射手
         if (Condition[ConditionFlag.Casting])
         {
-            var castingActionId = uiState->PlayerState.CastingActionId;
-            if (castingActionId == MagicBulletActionId)
+            if (actionManager->CastActionId == MagicBulletActionId)
                 return true;
         }
 
-        // 检查是否刚施放（动画播放期间）
+        // 检查是否刚施放（动画播放期间，施放条已结束但动画还在播）
         if (Condition[ConditionFlag.InCombat])
         {
-            var actionManager = ActionManager.Instance();
-            if (actionManager == null) return false;
-
-            if (actionManager->IsCasting)
+            if (actionManager->CastActionId == MagicBulletActionId &&
+                actionManager->CastTimeElapsed < actionManager->CastTimeTotal)
             {
-                return actionManager->CastAction == MagicBulletActionId;
+                return true;
             }
         }
 
