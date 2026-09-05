@@ -1,25 +1,25 @@
 # MyPlugins
 
-Personal Dalamud third-party plugin repository for FFXIV.
+个人 Dalamud 第三方插件仓库（FF14）。
 
-## How to Add
+## 添加方法
 
-1. Open **Dalamud Settings → Experimental → Custom Plugin Repositories**
-2. Add this URL:
+1. 打开 **Dalamud 设置 → 实验性功能 → 自定义插件库**
+2. 添加以下地址：
    ```
    https://raw.githubusercontent.com/HAAAAe1/MyPlugins/main/pluginmaster.json
    ```
-3. Click **Save** at the top of the settings page
-4. Open the **Dalamud Plugin Installer** and browse/install plugins from this repo
+3. 点击页面顶部的 **保存**
+4. 打开 **Dalamud 插件管理器**，即可浏览/安装本仓库中的插件
 
-## Plugins
+## 插件列表
 
-| Name | Description |
-|------|-------------|
-| _(empty)_ | No plugins added yet |
+| 名称 | 说明 |
+|------|------|
+| _(暂无)_ | 还没加插件 |
 
-## Notes
+## 说明
 
-- `pluginmaster.json` follows the [Dalamud third-party repo format](https://github.com/goatcorp/Dalamud/wiki/Third-Party-Plugin-Repo-Format)
-- Each plugin entry needs: `Name`, `InternalName`, `AssemblyVersion`, `Author`, `Punchline`, `Description`, `DalamudApiLevel`, `DownloadLinkInstall`, `DownloadLinkUpdate`
-- Plugin zip files are hosted as GitHub Releases (tag = version, asset = `latest.zip`)
+- `pluginmaster.json` 遵循 [Dalamud 第三方插件仓库格式](https://github.com/goatcorp/Dalamud/wiki/Third-Party-Plugin-Repo-Format)
+- 每个插件条目需要：`Name`、`InternalName`、`AssemblyVersion`、`Author`、`Punchline`、`Description`、`DalamudApiLevel`、`DownloadLinkInstall`、`DownloadLinkUpdate`
+- 插件 zip 通过 GitHub Releases 发布（tag = 版本号，附件 = `latest.zip`）
