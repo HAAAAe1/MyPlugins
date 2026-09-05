@@ -10,36 +10,27 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-    env:
-      DALAMUD_HOME: /tmp/dalamud
+    runs-on: windows-2022
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup .NET
+      - name: Install .NET
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
 
       - name: Download Dalamud
         run: |
-          wget -q https://goatcorp.github.io/dalamud-distrib/latest.zip -O /tmp/dalamud.zip
-          mkdir -p ${{ env.DALAMUD_HOME }}
-          unzip -q /tmp/dalamud.zip -d ${{ env.DALAMUD_HOME }}
-
-      - name: Restore
-        run: dotnet restore MagicBulletFullEffects/MagicBulletFullEffects.csproj
+          Invoke-WebRequest -Uri https://goatcorp.github.io/dalamud-distrib/latest.zip -OutFile latest.zip
+          Expand-Archive -Force latest.zip "$env:AppData\XIVLauncher\addon\Hooks\dev"
 
       - name: Build
-        run: dotnet build --configuration Release MagicBulletFullEffects/MagicBulletFullEffects.csproj -p:AssemblyVersion=${GITHUB_REF_NAME#v}
-
-      - name: Find zip
-        run: find . -name "latest.zip" -o -name "*.zip" | head -20
+        run: dotnet build --configuration Release
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            **/latest.zip
+          files: MagicBulletFullEffects/bin/x64/Release/MagicBulletFullEffects/*
           generate_release_notes: true

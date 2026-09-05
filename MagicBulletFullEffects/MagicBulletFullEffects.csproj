@@ -1,14 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
 <Project Sdk="Dalamud.NET.Sdk/15.0.0">
   <PropertyGroup>
-    <Version>1.0.0.0</Version>
+    <Version>1.0.0</Version>
     <Author>HAAAAe1</Author>
     <Name>MagicBulletFullEffects</Name>
     <Punchline>魔弹射手简易特效改为全部特效</Punchline>
-    <Description>在简易特效设置下，强制魔弹射手（Action ID 29415）显示全部特效。
-检测到施放魔弹射手时自动切换为全部特效，施放结束后恢复原设置。</Description>
+    <Description>在简易特效设置下，强制魔弹射手（Action ID 29415）显示全部特效。检测到施放魔弹射手时自动切换为全部特效，施放结束后恢复原设置。</Description>
     <RepoUrl>https://github.com/HAAAAe1/MyPlugins</RepoUrl>
     <Tags>特效;魔弹射手;MCH;机工</Tags>
-    <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
-    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
   </PropertyGroup>
 </Project>

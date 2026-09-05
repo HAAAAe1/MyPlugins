@@ -1,6 +1,5 @@
-using System;
-
 using Dalamud.Game.ClientState.Conditions;
+using Dalamud.IoC;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game;
@@ -15,32 +14,24 @@ public sealed class Plugin : IDalamudPlugin
 
     private const uint MagicBulletActionId = 29415;
 
-    private readonly IFramework _framework;
-    private readonly ICondition _condition;
-    private readonly IPluginLog _log;
+    [PluginService] internal static IFramework Framework { get; private set; } = null!;
+    [PluginService] internal static ICondition Condition { get; private set; } = null!;
+    [PluginService] internal static IPluginLog Log { get; private set; } = null!;
 
     private bool _isActive;
     private byte _savedSelf;
     private byte _savedParty;
     private byte _savedOther;
 
-    public Plugin(
-        IDalamudPluginInterface pluginInterface,
-        IFramework framework,
-        ICondition condition,
-        IPluginLog log)
+    public Plugin()
     {
-        _framework = framework;
-        _condition = condition;
-        _log = log;
-
-        _framework.Update += OnFrameworkUpdate;
-        _log.Info("MagicBulletFullEffects loaded. Action ID: {ActionId}", MagicBulletActionId);
+        Framework.Update += OnFrameworkUpdate;
+        Log.Info("MagicBulletFullEffects loaded. Action ID: {ActionId}", MagicBulletActionId);
     }
 
     public void Dispose()
     {
-        _framework.Update -= OnFrameworkUpdate;
+        Framework.Update -= OnFrameworkUpdate;
     }
 
     private unsafe void OnFrameworkUpdate(IFramework framework)
@@ -53,19 +44,19 @@ public sealed class Plugin : IDalamudPlugin
                 {
                     _isActive = true;
                     EnableFullEffects();
-                    _log.Debug("魔弹射手特效已激活：强制全部特效");
+                    Log.Debug("魔弹射手特效已激活：强制全部特效");
                 }
             }
             else if (_isActive)
             {
                 _isActive = false;
                 RestoreEffects();
-                _log.Debug("魔弹射手特效已恢复：返回原始设置");
+                Log.Debug("魔弹射手特效已恢复：返回原始设置");
             }
         }
         catch (Exception ex)
         {
-            _log.Error(ex, "Error in OnFrameworkUpdate");
+            Log.Error(ex, "Error in OnFrameworkUpdate");
         }
     }
 
@@ -77,26 +68,23 @@ public sealed class Plugin : IDalamudPlugin
         var uiState = UIState.Instance();
         if (uiState == null) return false;
 
-        // 检查是否正在施放魔弹射手（施放条期间）
-        if (_condition[ConditionFlag.Casting])
+        // 检查是否正在施放魔弹射手
+        if (Condition[ConditionFlag.Casting])
         {
-            var actionManager = ActionManager.Instance();
-            if (actionManager != null && actionManager->CastActionId == MagicBulletActionId)
+            var castingActionId = uiState->PlayerState.CastingActionId;
+            if (castingActionId == MagicBulletActionId)
                 return true;
         }
 
         // 检查是否刚施放（动画播放期间）
-        if (_condition[ConditionFlag.InCombat])
+        if (Condition[ConditionFlag.InCombat])
         {
             var actionManager = ActionManager.Instance();
-            if (actionManager != null)
+            if (actionManager == null) return false;
+
+            if (actionManager->IsCasting)
             {
-                // CastActionId 非零且 CastTimeElapsed < CastTimeTotal 表示正在施放/动画中
-                if (actionManager->CastActionId == MagicBulletActionId &&
-                    actionManager->CastTimeElapsed < actionManager->CastTimeTotal)
-                {
-                    return true;
-                }
+                return actionManager->CastAction == MagicBulletActionId;
             }
         }
 
