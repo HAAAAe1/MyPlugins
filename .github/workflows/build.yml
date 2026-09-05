@@ -29,14 +29,18 @@ jobs:
       - name: Build
         run: dotnet build --configuration Release
 
-      - name: Find output
-        run: Get-ChildItem -Recurse -File | Where-Object { $_.Extension -in '.dll','.json','.zip' } | ForEach-Object { $_.FullName }
+      - name: Package
+        run: |
+          $dllDir = "MagicBulletFullEffects\bin\Release\MagicBulletFullEffects"
+          if (-not (Test-Path $dllDir)) {
+            Write-Error "Output directory not found: $dllDir"
+            exit 1
+          }
+          Compress-Archive -Path "$dllDir\*" -DestinationPath latest.zip -Force
+          Get-ChildItem $dllDir -Name
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            MagicBulletFullEffects/bin/x64/Release/MagicBulletFullEffects/*
-            MagicBulletFullEffects/bin/Release/**/*
-            **/latest.zip
+          files: latest.zip
           generate_release_notes: true
