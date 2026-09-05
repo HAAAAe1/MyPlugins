@@ -19,6 +19,9 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static ICondition Condition { get; private set; } = null!;
     [PluginService] internal static IPluginLog Log { get; private set; } = null!;
 
+    private bool _isActive;
+    private byte _savedPvpEnemy;
+
     private byte _savedPvpEnemy;
 
     public Plugin()
