@@ -29,8 +29,14 @@ jobs:
       - name: Build
         run: dotnet build --configuration Release
 
+      - name: Find output
+        run: Get-ChildItem -Recurse -File | Where-Object { $_.Extension -in '.dll','.json','.zip' } | ForEach-Object { $_.FullName }
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: MagicBulletFullEffects/bin/x64/Release/MagicBulletFullEffects/*
+          files: |
+            MagicBulletFullEffects/bin/x64/Release/MagicBulletFullEffects/*
+            MagicBulletFullEffects/bin/Release/**/*
+            **/latest.zip
           generate_release_notes: true
