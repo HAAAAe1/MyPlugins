@@ -8,5 +8,7 @@
 检测到施放魔弹射手时自动切换为全部特效，施放结束后恢复原设置。</Description>
     <RepoUrl>https://github.com/HAAAAe1/MyPlugins</RepoUrl>
     <Tags>特效;魔弹射手;MCH;机工</Tags>
+    <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
   </PropertyGroup>
 </Project>
