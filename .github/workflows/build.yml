@@ -29,10 +29,10 @@ jobs:
           unzip -q /tmp/dalamud.zip -d ${{ env.DALAMUD_HOME }}
 
       - name: Restore
-        run: dotnet restore
+        run: dotnet restore MagicBulletFullEffects/MagicBulletFullEffects.csproj
 
       - name: Build
-        run: dotnet build --configuration Release -p:AssemblyVersion=${GITHUB_REF_NAME#v}
+        run: dotnet build --configuration Release MagicBulletFullEffects/MagicBulletFullEffects.csproj -p:AssemblyVersion=${GITHUB_REF_NAME#v}
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
