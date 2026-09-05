@@ -22,8 +22,21 @@
 
 ## 兼容性
 
-- Dalamud API Level 9+
+- Dalamud API Level 15+（Dalamud.NET.Sdk 15.0.0）
 - 需要 FFXIVClientStructs
+
+## 构建
+
+本地构建需要：
+1. .NET 10 SDK
+2. Dalamud 开发环境（XIVLauncher + Dalamud）
+
+```bash
+dotnet restore MagicBulletFullEffects/MagicBulletFullEffects.csproj
+dotnet build --configuration Release MagicBulletFullEffects/MagicBulletFullEffects.csproj
+```
+
+或通过 GitHub Actions 自动构建（推送 `v*.*.*` tag 触发）。
 
 ## 注意事项
 

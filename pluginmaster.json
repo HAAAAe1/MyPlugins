@@ -9,7 +9,7 @@
     "ApplicableVersion": "any",
     "LoadPriority": 0,
     "Tags": ["特效", "魔弹射手", "MCH", "机工"],
-    "DalamudApiLevel": 9,
+    "DalamudApiLevel": 15,
     "AcceptsFeedback": true,
     "RepoUrl": "https://github.com/HAAAAe1/MyPlugins",
     "DownloadLinkInstall": "https://github.com/HAAAAe1/MyPlugins/releases/download/1.0.0/latest.zip",

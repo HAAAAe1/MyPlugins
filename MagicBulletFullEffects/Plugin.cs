@@ -75,11 +75,11 @@ public sealed class Plugin : IDalamudPlugin
         var uiState = UIState.Instance();
         if (uiState == null) return false;
 
-        // 检查是否正在施放魔弹射手
+        // 检查是否正在施放魔弹射手（施放条期间）
         if (_condition[ConditionFlag.Casting])
         {
-            var castingActionId = uiState->PlayerState.CastingActionId;
-            if (castingActionId == MagicBulletActionId)
+            var actionManager = ActionManager.Instance();
+            if (actionManager != null && actionManager->CastActionId == MagicBulletActionId)
                 return true;
         }
 
@@ -87,11 +87,14 @@ public sealed class Plugin : IDalamudPlugin
         if (_condition[ConditionFlag.InCombat])
         {
             var actionManager = ActionManager.Instance();
-            if (actionManager == null) return false;
-
-            if (actionManager->IsCastning)
+            if (actionManager != null)
             {
-                return actionManager->CastAction == MagicBulletActionId;
+                // CastActionId 非零且 CastTimeElapsed < CastTimeTotal 表示正在施放/动画中
+                if (actionManager->CastActionId == MagicBulletActionId &&
+                    actionManager->CastTimeElapsed < actionManager->CastTimeTotal)
+                {
+                    return true;
+                }
             }
         }
 
