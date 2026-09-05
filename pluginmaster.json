@@ -2,7 +2,7 @@
   {
     "Name": "MagicBulletFullEffects",
     "InternalName": "MagicBulletFullEffects",
-    "AssemblyVersion": "1.0.0",
+    "AssemblyVersion": "1.0.0.0",
     "Author": "HAAAAe1",
     "Punchline": "魔弹射手简易特效改为全部特效",
     "Description": "在简易特效设置下，强制魔弹射手显示全部特效。检测到施放魔弹射手时自动切换，施放结束后恢复原设置。",
