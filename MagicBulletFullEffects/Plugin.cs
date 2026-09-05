@@ -19,10 +19,7 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static ICondition Condition { get; private set; } = null!;
     [PluginService] internal static IPluginLog Log { get; private set; } = null!;
 
-    private bool _isActive;
-    private byte _savedSelf;
-    private byte _savedParty;
-    private byte _savedOther;
+    private byte _savedPvpEnemy;
 
     public Plugin()
     {
@@ -45,14 +42,14 @@ public sealed class Plugin : IDalamudPlugin
                 {
                     _isActive = true;
                     EnableFullEffects();
-                    Log.Debug("魔弹射手特效已激活：强制全部特效");
+                    Log.Information("魔弹射手特效已激活：强制对战敌方玩家完全显示");
                 }
             }
             else if (_isActive)
             {
                 _isActive = false;
                 RestoreEffects();
-                Log.Debug("魔弹射手特效已恢复：返回原始设置");
+                Log.Information("魔弹射手特效已恢复：返回原始设置");
             }
         }
         catch (Exception ex)
@@ -72,18 +69,10 @@ public sealed class Plugin : IDalamudPlugin
         // 检查是否正在施放魔弹射手
         if (Condition[ConditionFlag.Casting])
         {
-            if (actionManager->CastActionId == MagicBulletActionId)
+            var castId = actionManager->CastActionId;
+            Log.Verbose("Casting action: {ActionId}", castId);
+            if (castId == MagicBulletActionId)
                 return true;
-        }
-
-        // 检查是否刚施放（动画播放期间，施放条已结束但动画还在播）
-        if (Condition[ConditionFlag.InCombat])
-        {
-            if (actionManager->CastActionId == MagicBulletActionId &&
-                actionManager->CastTimeElapsed < actionManager->CastTimeTotal)
-            {
-                return true;
-            }
         }
 
         return false;
@@ -94,13 +83,9 @@ public sealed class Plugin : IDalamudPlugin
         var uiState = UIState.Instance();
         if (uiState == null) return;
 
-        _savedSelf = uiState->BattleEffectSelf;
-        _savedParty = uiState->BattleEffectParty;
-        _savedOther = uiState->BattleEffectOther;
-
-        uiState->BattleEffectSelf = 0;
-        uiState->BattleEffectParty = 0;
-        uiState->BattleEffectOther = 0;
+        _savedPvpEnemy = uiState->BattleEffectPvPEnemyPc;
+        uiState->BattleEffectPvPEnemyPc = 0;
+        Log.Info("PvP特效已改为完全显示 (was {Old}, now 0)", _savedPvpEnemy);
     }
 
     private unsafe void RestoreEffects()
@@ -108,8 +93,7 @@ public sealed class Plugin : IDalamudPlugin
         var uiState = UIState.Instance();
         if (uiState == null) return;
 
-        uiState->BattleEffectSelf = _savedSelf;
-        uiState->BattleEffectParty = _savedParty;
-        uiState->BattleEffectOther = _savedOther;
+        uiState->BattleEffectPvPEnemyPc = _savedPvpEnemy;
+        Log.Info("PvP特效已恢复为 {Value}", _savedPvpEnemy);
     }
 }
