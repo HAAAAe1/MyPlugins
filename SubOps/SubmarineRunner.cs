@@ -270,6 +270,16 @@ public sealed class SubmarineRunner
 
     private void Decide()
     {
+        // 场景切换中三个指针会暂时全是 null，这时候千万别急着传送——
+        // 否则「刚点进工房」会被判成「不在房屋里」，又传送回住宅区，来回死循环。
+        if (this.condition[ConditionFlag.BetweenAreas]
+            || this.condition[ConditionFlag.OccupiedInEvent])
+        {
+            this.StatusText = "等待场景切换…";
+            this.SetStage(RunnerStage.Decide, 1);
+            return;
+        }
+
         // 进到工房了：直接开面板。
         if (Workshop.InWorkshop)
         {

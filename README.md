@@ -18,7 +18,7 @@
 
 | 名称 | 版本 | 说明 |
 |------|------|------|
-| **SubOps** | 0.5.2 | 部队工房潜水艇作业：一键收取、自动修理、重新委派，支持多角色轮换。带配置窗口（名册 / 实时状态 / 行为 / 校准）。场景移动用瞬移，不需要 vnavmesh；切角色需要 Lifestream |
+| **SubOps** | 0.5.3 | 部队工房潜水艇作业：一键收取、自动修理、重新委派，支持多角色轮换。带配置窗口（名册 / 实时状态 / 行为 / 校准）。场景移动用瞬移，不需要 vnavmesh；切角色需要 Lifestream |
 
 ## 说明
 
@@ -40,7 +40,7 @@
 不匹配、容易编译失败，所以 SubOps 一律本地构建发布：
 
 ```bash
-./scripts/release-subops.sh 0.5.2
+./scripts/release-subops.sh 0.5.3
 ```
 
 脚本依次做：改 `SubOps.csproj` 的 `Version` → 编译 → 校验产物清单里的 `AssemblyVersion`
