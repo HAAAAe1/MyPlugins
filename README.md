@@ -17,7 +17,6 @@
 | 名称 | 版本 | 说明 |
 |------|------|------|
 | **SubOps** | 0.1.0 | 部队工房潜水艇作业：一键收取、自动修理、重新委派，支持多角色轮换。需 vnavmesh（寻路）+ Lifestream（切角色） |
-| MagicBulletFullEffects | 1.0.0 | 魔弹射手简易特效改为全部特效 |
 
 ## 说明
 
@@ -27,7 +26,6 @@
 
 | 插件 | tag | 附件 |
 |------|-----|------|
-| MagicBulletFullEffects | `v1.0.0` | `latest.zip` |
 | SubOps | `subops-v0.1.0` | `SubOps.zip` |
 
 ## 发布 SubOps
