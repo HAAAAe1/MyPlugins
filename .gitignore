@@ -4,5 +4,7 @@ _logs.zip
 _tmp.cjs
 latest.zip
 SubOps.zip
+# 但 dist/ 下的发布包要进仓库，供 jsDelivr 分发
+!dist/SubOps.zip
 bin/
 obj/
