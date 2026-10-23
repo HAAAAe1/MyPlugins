@@ -2,7 +2,7 @@
   {
     "Name": "SubOps",
     "InternalName": "SubOps",
-    "AssemblyVersion": "0.5.0.0",
+    "AssemblyVersion": "0.5.1.0",
     "Author": "HAAAAe1",
     "Punchline": "部队工房潜水艇作业：一键收取、自动修理、重新委派",
     "Description": "读取部队工房 4 艘潜水艇的返航时间与零件耐久，自动进屋、开航行管制面板、逐艘确认收取，出航前自动修理耐久为 0 的零件，最后按原航线再次委派。支持多角色轮换：从名册第一个角色开始逐个处理，收完自动切下一个。场景移动用瞬移（不需要 vnavmesh 寻路），切角色需要 Lifestream。",
@@ -26,7 +26,7 @@
     "LastUpdate": 1792776000,
     "DownloadCount": 0,
     "RepoUrl": "https://github.com/HAAAAe1/MyPlugins",
-    "DownloadLinkInstall": "https://jsdelivr.b-cdn.net/gh/HAAAAe1/MyPlugins@v0.5.0/dist/SubOps.zip",
-    "DownloadLinkUpdate": "https://jsdelivr.b-cdn.net/gh/HAAAAe1/MyPlugins@v0.5.0/dist/SubOps.zip"
+    "DownloadLinkInstall": "https://jsdelivr.b-cdn.net/gh/HAAAAe1/MyPlugins@v0.5.1/dist/SubOps-0.5.1.zip",
+    "DownloadLinkUpdate": "https://jsdelivr.b-cdn.net/gh/HAAAAe1/MyPlugins@v0.5.1/dist/SubOps-0.5.1.zip"
   }
 ]
