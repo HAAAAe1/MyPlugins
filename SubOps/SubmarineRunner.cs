@@ -1,5 +1,9 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using Dalamud.Game.ClientState.Conditions;
+using Dalamud.Game.ClientState.Objects.Enums;
+using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game.UI;
 
@@ -13,24 +17,35 @@ public enum RunnerStage
     GoEntrance,
     PickRoom,
     GoPanel,
-    OpenList,
     Collect,
     Done,
     Failed,
 }
 
 /// <summary>
-/// 收潜水艇的状态机。
+/// 收潜水艇的状态机。流程照搬 DailyRoutines 的 AutoSubmarineCollect：
 ///
-/// 流程：判断所在地 → （不在房屋）传送到部队房屋 → 进庭院入口 → 选「移动到部队工房」
-///      → 走到航行管制面板 → 选「管理潜水艇」 → 逐艘确认 / 再次出航。
+/// <code>
+/// 判定位置 → 传送回部队房区 → 点入口进屋（确认「进入」）→ 房屋内走到房间切换点
+///          → 选「潜水艇工房」→ 走到航行管制面板 → 选「管理潜水艇」
+///          → 列表里按槽位下标选艇 → 收远航报告 → 修理 → 出发 → 下一艘
+/// </code>
 ///
-/// 每个阶段都做了节流，失败会停在 Failed 并给出可操作的原因，不会无限重试。
+/// 三个容易踩坑的地方，这里的处理方式：
+/// ① 「进入/离开房屋」是同一个 SelectYesno。旧版无条件点「是」，人在大厅里
+///    误交互到出口时会被自动点「是」送出屋，于是「进屋→立刻离开」来回循环。
+///    现在含「离开」的一律点「否」，只有其它确认才点「是」。
+/// ② 菜单项文本在 AtkValues[i + 7]，不在 PopupMenu 的缓存里。
+/// ③ 艇列表里的项顺序 = 槽位顺序（0~3），直接按下标选，不用去认「远航报告/出发」子菜单；
+///    已经收过的艇本来就没有报告可收，游戏会自己跳过，少一层判断就少一处错。
 /// </summary>
 public sealed class SubmarineRunner
 {
-    /// <summary>部队房屋入口的事件对象 BaseId（住宅区里那个门）。</summary>
-    private const uint HouseEntranceBaseId = 2002737;
+    /// <summary>部队房屋入口（庭院里那扇门）的 DataId。DR 用的就是这个常量。</summary>
+    private const uint HouseEntranceDataId = 2002737;
+
+    /// <summary>「移动到别的房间」的交互点子类型，用于在黑名单命中后换下一个候选。</summary>
+    private const int MaxDoorCandidates = 6;
 
     private readonly Configuration config;
     private readonly Navigator nav;
@@ -43,11 +58,12 @@ public sealed class SubmarineRunner
     /// <summary>上一次自动确认的提示文本，避免每 0.4 秒刷一次聊天框。</summary>
     private string lastYesnoText = string.Empty;
 
-    /// <summary>当前这艘艇已经点了多少次「出发」（详情页一次 + 确认框一次）。</summary>
+    /// <summary>当前这艘艇已经点了多少次「出发」。</summary>
     private int departFires;
+
     private int handled;
 
-    /// <summary>当前正在处理的槽位（选中列表项后记录，用于读该艇的零件）。</summary>
+    /// <summary>当前正在处理的槽位（= 列表里的下标 = 潜艇槽位）。</summary>
     private int currentSlot = -1;
 
     /// <summary>当前槽位已经尝试修理的次数，避免修理失败时反复下发命令。</summary>
@@ -67,6 +83,18 @@ public sealed class SubmarineRunner
     private const int MaxRunMinutes = 10;
 
     private DateTime runStartedAt = DateTime.MinValue;
+
+    /// <summary>大厅里候选门的轮换下标：交互后没弹出房间菜单就换下一个。</summary>
+    private int doorCursor;
+
+    /// <summary>上一次房门交互的时间，用来判断「超时没反应」。</summary>
+    private DateTime doorInteractAt = DateTime.MinValue;
+
+    /// <summary>已排除的房门 ObjectId，避免反复去点「离开房屋」那扇门。</summary>
+    private readonly HashSet<ulong> badDoors = new();
+
+    /// <summary>上一次交互的房门 ObjectId（用于在没反应时拉黑它）。</summary>
+    private ulong currentDoorId;
 
     public SubmarineRunner(Configuration config, Navigator nav, IGameGui gui, ICondition condition, IChatGui chat)
     {
@@ -97,6 +125,10 @@ public sealed class SubmarineRunner
         this.currentSlot = -1;
         this.repairAttempts = 0;
         this.teleportAttempts = 0;
+        this.departFires = 0;
+        this.lookupRetries = 0;
+        this.doorCursor = 0;
+        this.badDoors.Clear();
         this.lastYesnoText = string.Empty;
         this.runStartedAt = DateTime.UtcNow;
         this.SetStage(RunnerStage.Decide, 0);
@@ -121,8 +153,11 @@ public sealed class SubmarineRunner
     }
 
     /// <summary>
-    /// 由外部（界面回调）调用：运行期间弹出的「是 / 否」确认框一律点「是」。
-    /// 进工房、收取返航结果、再次出航都会经过这个框；不在运行中时不动它。
+    /// 运行期间弹出的「是 / 否」确认框。
+    ///
+    /// 「要进入这间房屋吗？」和「要离开这间房屋吗？」用的是同一个窗口，
+    /// 旧版一律点「是」，人在大厅里误交互到出口就会被送出去，看起来像
+    /// 「刚进屋又自己走了」。所以这里把「离开」单独拎出来点「否」。
     /// </summary>
     public void OnSelectYesno()
     {
@@ -131,6 +166,23 @@ public sealed class SubmarineRunner
 
         var strings = AddonHelper.ReadStrings(this.gui, AddonHelper.SelectYesno);
         var text = strings.Count > 0 ? strings[0] : string.Empty;
+
+        var isLeave = text.Contains("离开", StringComparison.Ordinal)
+                      || text.Contains("離", StringComparison.Ordinal)
+                      || text.Contains("出", StringComparison.Ordinal) && text.Contains("房屋", StringComparison.Ordinal);
+
+        if (isLeave)
+        {
+            if (text != this.lastYesnoText)
+            {
+                this.lastYesnoText = text;
+                this.Say($"拒绝离开：{text}");
+            }
+
+            AddonHelper.Fire(this.gui, AddonHelper.SelectYesno, 1);
+            return;
+        }
+
         if (!string.IsNullOrEmpty(text) && text != this.lastYesnoText)
         {
             this.lastYesnoText = text;
@@ -186,7 +238,6 @@ public sealed class SubmarineRunner
             case RunnerStage.GoPanel:
                 this.GoPanel();
                 break;
-            case RunnerStage.OpenList:
             case RunnerStage.Collect:
                 this.Collect();
                 break;
@@ -195,20 +246,26 @@ public sealed class SubmarineRunner
 
     private void Decide()
     {
+        // 进到工房了：直接开面板。
         if (Workshop.InWorkshop)
         {
+            this.lookupRetries = 0;
             this.SetStage(RunnerStage.GoPanel, 0);
             return;
         }
 
+        // 在房屋大厅里：走到房间切换点，选工房。
         if (Workshop.InHouse)
         {
+            this.lookupRetries = 0;
             this.SetStage(RunnerStage.PickRoom, 0);
             return;
         }
 
+        // 在庭院里：点门进屋。
         if (Workshop.Outdoors)
         {
+            this.lookupRetries = 0;
             this.SetStage(RunnerStage.GoEntrance, 0);
             return;
         }
@@ -241,12 +298,17 @@ public sealed class SubmarineRunner
         }
 
         this.StatusText = "传送到部队房屋…";
-        this.SetStage(RunnerStage.Decide, 5);
+        this.teleportAttempts++;
+        this.SetStage(RunnerStage.Decide, 6);
     }
 
+    /// <summary>
+    /// 庭院里点房门进屋。DR 是按 DataId 找这个 EventObj 的，
+    /// 用 DataId 而不是 BaseId 能躲开「同区域里有好几扇长得一样的门」。
+    /// </summary>
     private void GoEntrance()
     {
-        var entrance = this.nav.FindEventObject(HouseEntranceBaseId, default, 0);
+        var entrance = this.FindEventByDataId(HouseEntranceDataId);
         if (entrance == null)
         {
             if (this.lookupRetries++ < MaxLookupRetries)
@@ -279,18 +341,28 @@ public sealed class SubmarineRunner
 
         this.nav.Interact(entrance);
         this.StatusText = "进入房屋…";
-        this.SetStage(RunnerStage.Decide, 2.5);
+
+        // 进屋要读条 + 换场景，给足时间；Decide 会重新判断位置。
+        this.SetStage(RunnerStage.Decide, 3);
     }
 
+    /// <summary>
+    /// 房屋大厅 → 部队工房。
+    /// 大厅里「移动到别的房间」和「离开房屋」是两扇长得一样的门，
+    /// 所以这里不再盲目点最近的那个，而是挨个试：交互后没能弹出房间菜单的，
+    /// 拉黑换下一个。
+    /// </summary>
     private void PickRoom()
     {
+        // 房间菜单已经弹出：按文字挑「工房」。
         if (AddonHelper.IsShown(this.gui, AddonHelper.SelectString))
         {
-            // 门口菜单按文字挑「工房 / 潜水艇」，配置里的下标只作为兜底。
             var entries = AddonHelper.ReadMenuEntries(this.gui);
             var index = AddonHelper.FindMenuEntry(entries, "潜水艇工房");
             if (index < 0)
                 index = AddonHelper.FindMenuEntry(entries, "工房");
+            if (index < 0)
+                index = AddonHelper.FindMenuEntry(entries, "Workshop");
             if (index < 0)
                 index = this.config.RoomMenuIndex;
 
@@ -301,12 +373,29 @@ public sealed class SubmarineRunner
             }
 
             this.StatusText = "进入部队工房…";
-            this.SetStage(RunnerStage.Decide, 3.5);
+            this.lookupRetries = 0;
+            this.SetStage(RunnerStage.Decide, 4);
             return;
         }
 
-        var anchor = this.config.DoorAnchor;
-        var door = this.nav.FindEventObject(0, anchor, Configuration.DoorSearchRadius);
+        // 上一步交互了门但什么都没弹出来：判定这扇不是房间切换点，拉黑换下一个。
+        if (this.doorInteractAt != DateTime.MinValue
+            && (DateTime.UtcNow - this.doorInteractAt).TotalSeconds > 3)
+        {
+            this.doorInteractAt = DateTime.MinValue;
+
+            if (this.currentDoorId != 0 && this.badDoors.Add(this.currentDoorId))
+            {
+                this.doorCursor = 0;
+                this.Say($"这扇门不通房间菜单，已排除（累计 {this.badDoors.Count} 扇）");
+            }
+            else
+            {
+                this.doorCursor++;
+            }
+        }
+
+        var door = this.PickDoor();
         if (door == null)
         {
             this.Fail("找不到「移动到其他房间」的入口。可执行 /subops objects 看看附近有什么，再用 /subops learn door 覆盖。");
@@ -327,24 +416,39 @@ public sealed class SubmarineRunner
                 return;
         }
 
+        this.currentDoorId = (ulong)door.GameObjectId;
         this.nav.Interact(door);
-        this.Delay(1.5);
+        this.doorInteractAt = DateTime.UtcNow;
+        this.Delay(1.2);
     }
 
+    /// <summary>按锚点距离排序列出候选门，跳过已拉黑的。</summary>
+    private IGameObject? PickDoor()
+    {
+        var anchor = this.config.DoorAnchor;
+
+        var candidates = this.nav.EventObjectsNear(anchor, Configuration.DoorSearchRadius)
+            .Where(x => !this.badDoors.Contains((ulong)x.GameObjectId))
+            .ToList();
+
+        if (candidates.Count == 0)
+            return null;
+
+        var index = Math.Clamp(this.doorCursor, 0, candidates.Count - 1);
+        return candidates[index];
+    }
+
+    /// <summary>工房里找航行管制面板并打开「管理潜水艇」。</summary>
     private void GoPanel()
     {
+        // 面板菜单已经弹出。
         if (AddonHelper.IsShown(this.gui, AddonHelper.SelectString))
         {
             this.SetStage(RunnerStage.Collect, 0);
             return;
         }
 
-        // 优先按名字找「航行管制面板」，名字对不上再退回坐标搜索。
-        var anchor = this.config.HasPanelAnchor ? this.config.PanelAnchor : default;
-        var panel = this.nav.FindEventObjectByName("航行", anchor, Configuration.PanelSearchRadius)
-                    ?? this.nav.FindEventObjectByName("潜水艇", anchor, Configuration.PanelSearchRadius)
-                    ?? this.nav.FindEventObject(0, anchor == default ? this.nav.PlayerPosition : anchor,
-                        Configuration.PanelSearchRadius);
+        var panel = this.FindPanel();
         if (panel == null)
         {
             if (this.lookupRetries++ < MaxLookupRetries)
@@ -380,6 +484,21 @@ public sealed class SubmarineRunner
         this.SetStage(RunnerStage.Collect, 1.5);
     }
 
+    /// <summary>
+    /// 优先按名字找「航行管制面板」，名字对不上再退回「锚点/脚下附近最近的可交互物件」。
+    /// 工房很小，30 码内除了面板没有别的可交互东西。
+    /// </summary>
+    private IGameObject? FindPanel()
+    {
+        var anchor = this.config.HasPanelAnchor ? this.config.PanelAnchor : default;
+
+        return this.nav.FindEventObjectByName("航行", anchor, Configuration.PanelSearchRadius)
+               ?? this.nav.FindEventObjectByName("管制", anchor, Configuration.PanelSearchRadius)
+               ?? this.nav.EventObjectsNear(anchor == default ? this.nav.PlayerPosition : anchor,
+                       Configuration.PanelSearchRadius)
+                   .FirstOrDefault();
+    }
+
     private void Collect()
     {
         // 已点过出发、且所有流程窗口都关了 = 这艘真的派出去了，这时才计一艘。
@@ -402,7 +521,7 @@ public sealed class SubmarineRunner
             return;
         }
 
-        // ① 远航报告窗口。1 = 确认并收起报告（DailyRoutines 同款），0 = 只关闭。
+        // ① 远航报告窗口。1 = 确认并收起报告（DailyRoutines 同款）。
         if (AddonHelper.IsShown(this.gui, AddonHelper.ExplorationResult))
         {
             AddonHelper.Fire(this.gui, AddonHelper.ExplorationResult, 1);
@@ -411,7 +530,7 @@ public sealed class SubmarineRunner
             return;
         }
 
-        // ② 出航详情页：先修零件，再点出发，最后关窗。
+        // ② 出航详情页：先修零件，再点出发。
         if (AddonHelper.IsShown(this.gui, AddonHelper.ExplorationDetail))
         {
             if (this.config.AutoRepair && this.TryRepairParts())
@@ -425,7 +544,7 @@ public sealed class SubmarineRunner
             return;
         }
 
-        // ③ 选择菜单：面板主菜单 / 艇列表，靠文本分辨。
+        // ③ 选择菜单。
         if (AddonHelper.IsShown(this.gui, AddonHelper.SelectString))
         {
             this.HandleSelectMenu();
@@ -464,18 +583,21 @@ public sealed class SubmarineRunner
             return false;
         }
 
-        var part = damaged[0];
-        Workshop.RepairPart(this.currentSlot, part);
+        // 和 DR 一样一次性把待修部位全发出去，下一轮再看还有没有剩的。
+        foreach (var part in damaged)
+            Workshop.RepairPart(this.currentSlot, part);
+
         this.repairAttempts++;
-        this.StatusText = $"修理 {this.currentSlot + 1} 号艇 · {part + 1} 号零件（{damaged.Count} 个待修）…";
-        this.Delay(1.2);
+        this.StatusText = $"修理 {this.currentSlot + 1} 号艇（{damaged.Count} 个零件）…";
+        this.Delay(1.5);
         return true;
     }
 
     /// <summary>
-    /// 菜单按文字挑，不按下标猜：
-    /// 面板主菜单 → 「管理潜水艇」；单艇菜单 → 「修理配件」/「上次的远航报告」/「出发」；
-    /// 艇列表 → 按艇名匹配。已经收过报告的那艘本来就没有「远航报告」项，自然就落到「出发」。
+    /// 处理 SelectString。只有两种情况会走到这里：
+    /// ① 面板主菜单（「管理潜水艇」…）
+    /// ② 潜水艇列表（4 艘艇）
+    /// 靠「菜单项能不能匹配到艇名 / 是不是 4 项」区分，比认标题文字稳。
     /// </summary>
     private void HandleSelectMenu()
     {
@@ -497,32 +619,22 @@ public sealed class SubmarineRunner
             return;
         }
 
-        var log = AddonHelper.FindMenuEntry(entries, "远航报告");
-        if (log >= 0)
+        // 艇列表：按下标直接选（= 槽位），DR 也是这么干的。
+        var slot = this.PickVesselSlot(entries);
+        if (slot >= 0)
         {
-            AddonHelper.Fire(this.gui, AddonHelper.SelectString, log);
-            this.StatusText = "打开上次的远航报告…";
-            this.Delay(1.5);
-            return;
-        }
-
-        var deploy = AddonHelper.FindMenuEntry(entries, "出发");
-        if (deploy >= 0)
-        {
-            AddonHelper.Fire(this.gui, AddonHelper.SelectString, deploy);
-            this.StatusText = "选择出航…";
-            this.Delay(1.5);
-            return;
-        }
-
-        var (entryIndex, slot) = this.PickVessel(entries);
-        if (entryIndex >= 0)
-        {
-            AddonHelper.Fire(this.gui, AddonHelper.SelectString, entryIndex);
+            AddonHelper.Fire(this.gui, AddonHelper.SelectString, slot);
             this.currentSlot = slot;
             this.repairAttempts = 0;
             this.StatusText = $"处理 {slot + 1} 号槽位…";
-            this.Delay(1.5);
+            this.Delay(1.8);
+            return;
+        }
+
+        // 列表里已经没有被收的艇了：收工。
+        if (entries.Count >= 4 && this.handled > 0)
+        {
+            this.Finish($"全部收完，共 {this.handled} 艘");
             return;
         }
 
@@ -539,20 +651,48 @@ public sealed class SubmarineRunner
         this.Delay(0.5);
     }
 
-    /// <summary>在艇列表菜单里找一艘已返航的艇：返回（菜单项下标, 槽位）。</summary>
-    private (int EntryIndex, int Slot) PickVessel(System.Collections.Generic.List<string> entries)
+    /// <summary>
+    /// 在菜单里找一艘该处理的艇，返回它在菜单里的下标（= 槽位）。
+    ///
+    /// 先按「艇名匹配 + 已返航」挑；艇名读不到时退化成「4 项列表里第一个
+    /// 还没处理过的槽位」，保证不会因为名字对不上就卡死。
+    /// </summary>
+    private int PickVesselSlot(List<string> entries)
     {
-        foreach (var sub in Workshop.Read())
+        var subs = Workshop.Read();
+
+        foreach (var sub in subs)
         {
             if (!sub.IsBack || string.IsNullOrWhiteSpace(sub.Name))
                 continue;
 
+            if (sub.Slot == this.currentSlot)
+                continue;
+
             var index = AddonHelper.FindMenuEntry(entries, sub.Name);
             if (index >= 0)
-                return (index, sub.Slot);
+                return index;
         }
 
-        return (-1, -1);
+        // 名字对不上（国服译名差异 / 自定义名）：只要菜单正好是 4 项，
+        // 就按槽位顺序找下一个已返航的。
+        if (entries.Count == 4)
+        {
+            foreach (var sub in subs)
+            {
+                if (sub.IsBack && sub.Slot != this.currentSlot)
+                    return sub.Slot;
+            }
+        }
+
+        return -1;
+    }
+
+    /// <summary>按 DataId 找事件对象（房屋入口用）。</summary>
+    private IGameObject? FindEventByDataId(uint dataId)
+    {
+        return this.nav.EventObjectsNear(this.nav.PlayerPosition, 120f)
+            .FirstOrDefault(x => x.BaseId == dataId);
     }
 
     private void SetStage(RunnerStage stage, double delaySeconds)

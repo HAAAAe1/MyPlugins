@@ -2,11 +2,11 @@
   {
     "Name": "SubOps",
     "InternalName": "SubOps",
-    "AssemblyVersion": "0.4.2.0",
+    "AssemblyVersion": "0.5.0.0",
     "Author": "HAAAAe1",
     "Punchline": "部队工房潜水艇作业：一键收取、自动修理、重新委派",
     "Description": "读取部队工房 4 艘潜水艇的返航时间与零件耐久，自动进屋、开航行管制面板、逐艘确认收取，出航前自动修理耐久为 0 的零件，最后按原航线再次委派。支持多角色轮换：从名册第一个角色开始逐个处理，收完自动切下一个。场景移动用瞬移（不需要 vnavmesh 寻路），切角色需要 Lifestream。",
-    "Changelog": "移动改为一步到位瞬移（房区→房门→工坊门口→面板），不再逐帧推进；修正 Y 轴：有网格用网格地面高度，同房间用交互点自身高度并做贴地校正；新增 /subops y 查看落差。",
+    "Changelog": "0.5.0：按 DailyRoutines 重写交互链路。修掉「刚进屋就自己离开」——进出房屋共用同一个确认框，之前无条件点「是」，误交互到出口就自动出门兜圈子；现在含「离开」一律点「否」。菜单文字改从 AtkValues[i+7] 读，不再读会过期的缓存。潜艇列表按槽位下标直接选，不再去猜「远航报告/出发」子菜单；已收过的艇由游戏自己跳过。房屋入口改按 DataId 2002737 定位，大厅里试错的门会被拉黑换下一个。",
     "ApplicableVersion": "any",
     "LoadPriority": 0,
     "Tags": [
@@ -23,10 +23,10 @@
     "DalamudApiLevel": 15,
     "AcceptsFeedback": true,
     "IsHide": false,
-    "LastUpdate": 1792774662,
+    "LastUpdate": 1792776000,
     "DownloadCount": 0,
     "RepoUrl": "https://github.com/HAAAAe1/MyPlugins",
-    "DownloadLinkInstall": "https://jsdelivr.b-cdn.net/gh/HAAAAe1/MyPlugins@v0.4.2/dist/SubOps.zip",
-    "DownloadLinkUpdate": "https://jsdelivr.b-cdn.net/gh/HAAAAe1/MyPlugins@v0.4.2/dist/SubOps.zip"
+    "DownloadLinkInstall": "https://jsdelivr.b-cdn.net/gh/HAAAAe1/MyPlugins@v0.5.0/dist/SubOps.zip",
+    "DownloadLinkUpdate": "https://jsdelivr.b-cdn.net/gh/HAAAAe1/MyPlugins@v0.5.0/dist/SubOps.zip"
   }
 ]

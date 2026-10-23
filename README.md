@@ -7,20 +7,21 @@
 1. 打开 **Dalamud 设置 → 实验性功能 → 自定义插件库**
 2. 添加以下地址（**注意用这个，不是 raw.githubusercontent.com，国内连不上**）：
    ```
-   https://cdn.jsdelivr.net/gh/HAAAAe1/MyPlugins@main/pluginmaster.json
+   https://jsdelivr.b-cdn.net/gh/HAAAAe1/MyPlugins@v0.5.0/pluginmaster.json
    ```
 3. 点击页面顶部的 **保存**
 4. 打开 **Dalamud 插件管理器**，即可浏览/安装本仓库中的插件
 
-> 清单在 jsDelivr 上有最长 12 小时缓存。刚发版后如果还看到旧版本，
-> 说明缓存没刷；让作者执行一次
-> `https://purge.jsdelivr.net/gh/HAAAAe1/MyPlugins@main/pluginmaster.json` 即可强制刷新。
+> **为什么地址里带 `@v0.5.0` 而不是 `@main`**：jsDelivr 对分支名的缓存最长 12 小时，
+> 发版后订阅 `@main` 会继续拿到旧清单（表现为「版本号一直是老的」）。
+> tag 的内容永不改变，CDN 缓存旧内容也还是同一份，所以订阅地址走 tag。
+> 每次发版把地址里的版本号换成新的即可。
 
 ## 插件列表
 
 | 名称 | 版本 | 说明 |
 |------|------|------|
-| **SubOps** | 0.4.2 | 部队工房潜水艇作业：一键收取、自动修理、重新委派，支持多角色轮换。带配置窗口（名册 / 实时状态 / 行为 / 校准）。场景移动用瞬移，不需要 vnavmesh；切角色需要 Lifestream |
+| **SubOps** | 0.5.0 | 部队工房潜水艇作业：一键收取、自动修理、重新委派，支持多角色轮换。带配置窗口（名册 / 实时状态 / 行为 / 校准）。场景移动用瞬移，不需要 vnavmesh；切角色需要 Lifestream |
 
 ## 说明
 

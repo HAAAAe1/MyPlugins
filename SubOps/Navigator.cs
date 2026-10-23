@@ -172,6 +172,21 @@ public sealed unsafe class Navigator
     }
 
     /// <summary>
+    /// 列出附近的可交互事件对象，按距离从近到远排好。
+    /// 用于「大厅里有一堆长得一样的门」这种场景：挨个试，不靠猜。
+    /// </summary>
+    public List<IGameObject> EventObjectsNear(Vector3 anchor, float radius)
+    {
+        return this.objects
+            .Where(x => x.ObjectKind == ObjectKind.EventObj && x.IsValid() && x.IsTargetable)
+            .Select(x => (Obj: x, Distance: Vector3.Distance(x.Position, anchor)))
+            .Where(x => x.Distance <= radius)
+            .OrderBy(x => x.Distance)
+            .Select(x => x.Obj)
+            .ToList();
+    }
+
+    /// <summary>
     /// 列出附近的可交互事件对象，用于校准（/subops objects）。
     /// </summary>
     public List<(string Name, uint BaseId, Vector3 Position, float Distance)> ListEventObjects(float radius)
