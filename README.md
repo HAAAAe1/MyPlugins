@@ -21,7 +21,16 @@
 ## 说明
 
 - `pluginmaster.json` 遵循 [Dalamud 第三方插件仓库格式](https://github.com/goatcorp/Dalamud/wiki/Third-Party-Plugin-Repo-Format)
-- 每个插件条目需要：`Name`、`InternalName`、`AssemblyVersion`、`Author`、`Punchline`、`Description`、`DalamudApiLevel`、`DownloadLinkInstall`、`DownloadLinkUpdate`
+- **真正会被校验的只有三个字段**（见 `PluginRepository.IsValidManifest`）：`InternalName`、`Name`、
+  `AssemblyVersion`。缺任何一个，这条目会被静默丢弃（只写进 `dalamud.log`，界面上什么都不提示）。
+- 其余字段都是可选的，但影响显示：`Punchline`/`Description` 是卡片正文，`Author` 是作者，
+  `LastUpdate`（Unix 秒）是「最后更新」列，`DownloadCount` 是下载数，`Changelog` 是更新说明，
+  `DalamudApiLevel` 决定与客户端 API 的兼容判定。
+- `CategoryTags` 只能填白名单里的词，否则不生效：`other` / `jobs` / `ui` / `minigames` /
+  `inventory` / `sound` / `social` / `utility`（大小写不敏感）。
+- `ApplicableVersion` 填 `"any"` 是合法的，表示不限制游戏版本。
+- 第三方仓库**不能覆盖**官方仓库里已存在的 `InternalName`，同名条目会被整条丢弃（安全策略）。
+- 仓库地址必须返回**原始 JSON**（`raw.githubusercontent.com` 这类），填 GitHub 的网页地址会解析失败。
 - 插件 zip 通过 GitHub Releases 发布，release 附件命名与 tag 对应：
 
 | 插件 | tag | 附件 |
