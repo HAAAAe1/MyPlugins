@@ -21,6 +21,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly IFramework framework;
     private readonly IClientState clientState;
     private readonly IChatGui chat;
+    private readonly IPluginLog log;
 
     private readonly Configuration configuration;
     private readonly Navigator navigator;
@@ -54,6 +55,7 @@ public sealed class Plugin : IDalamudPlugin
         this.framework = framework;
         this.clientState = clientState;
         this.chat = chat;
+        this.log = log;
 
         this.configuration = pluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
         this.navigator = new Navigator(pluginInterface, objects, targets, clientState, log);
@@ -180,6 +182,12 @@ public sealed class Plugin : IDalamudPlugin
 
             case "learn":
                 this.Learn(parts.Length > 1 ? parts[1].ToLowerInvariant() : string.Empty);
+                break;
+
+            case "objects":
+            case "obj":
+            case "scan":
+                this.DumpObjects();
                 break;
 
             case "redist":
@@ -428,8 +436,9 @@ public sealed class Plugin : IDalamudPlugin
         this.chat.Print("  /subops stop             中断（同时停掉轮换）");
         this.chat.Print("  /subops run              只收当前这个角色");
         this.chat.Print("  /subops status           查看 4 个槽位状态与材料数量");
-        this.chat.Print("  /subops learn door       记录当前脚下的房间切换点");
-        this.chat.Print("  /subops learn panel      记录当前脚下的航行管制面板");
+        this.chat.Print("  /subops objects          列出 40 码内可交互物件（校准用，结果也写进日志）");
+        this.chat.Print("  /subops learn door       覆盖房门坐标（一般不用，已内置默认值）");
+        this.chat.Print("  /subops learn panel      覆盖面板坐标（一般不用，默认按名字自动找）");
         this.chat.Print("  /subops redist on|off    收完是否按原航线再次出航");
         this.chat.Print("  /subops autorepair on|off 出航前是否自动修理坏零件（默认开）");
         this.chat.Print("  /subops parts            查看每艘艇 4 个零件的耐久");
@@ -538,6 +547,12 @@ public sealed class Plugin : IDalamudPlugin
 
     private void Learn(string what)
     {
+        if (what is "objects" or "obj" or "scan")
+        {
+            this.DumpObjects();
+            return;
+        }
+
         var anchor = this.navigator.FindEventObject(0, this.navigator.PlayerPosition, 6f)?.Position
                      ?? this.navigator.PlayerPosition;
 
@@ -556,5 +571,30 @@ public sealed class Plugin : IDalamudPlugin
 
         this.pluginInterface.SavePluginConfig(this.configuration);
         this.chat.Print($"[SubOps] 已记录 {what}：({anchor.X:F2}, {anchor.Y:F2}, {anchor.Z:F2})");
+    }
+
+    /// <summary>
+    /// 打印附近的可交互事件对象（名字 / BaseId / 坐标），用来校准房门与面板。
+    /// 结果同时写进 Dalamud 日志，方便整段复制出来。
+    /// </summary>
+    private void DumpObjects()
+    {
+        var list = this.navigator.ListEventObjects(40f);
+        if (list.Count == 0)
+        {
+            this.chat.Print("[SubOps] 40 码内没有可交互事件对象（屋子里/工房里再试）。");
+            return;
+        }
+
+        this.chat.Print($"[SubOps] 40 码内可交互物件 {list.Count} 个（详见 /xllog）：");
+        foreach (var item in list)
+        {
+            var line = $"  {item.Name}  baseId={item.BaseId}  " +
+                       $"({item.Position.X:F2}, {item.Position.Y:F2}, {item.Position.Z:F2})  {item.Distance:F1}码";
+            this.chat.Print(line);
+            this.log.Information($"[SubOps/objects]{line}");
+        }
+
+        this.chat.Print("[SubOps] 站在房门/面板前，用 /subops learn door | /subops learn panel 记录。");
     }
 }

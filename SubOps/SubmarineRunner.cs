@@ -39,6 +39,12 @@ public sealed class SubmarineRunner
     private readonly IChatGui chat;
 
     private DateTime nextActionAt = DateTime.MinValue;
+
+    /// <summary>上一次自动确认的提示文本，避免每 0.4 秒刷一次聊天框。</summary>
+    private string lastYesnoText = string.Empty;
+
+    /// <summary>当前这艘艇已经点了多少次「出发」（详情页一次 + 确认框一次）。</summary>
+    private int departFires;
     private int handled;
 
     /// <summary>当前正在处理的槽位（选中列表项后记录，用于读该艇的零件）。</summary>
@@ -72,14 +78,11 @@ public sealed class SubmarineRunner
 
     public bool Busy => this.Stage is not (RunnerStage.Idle or RunnerStage.Done or RunnerStage.Failed);
 
-    /// <summary>启动一轮处理。返回 false 表示条件不满足（没装 vnavmesh），没有启动。</summary>
+    /// <summary>启动一轮处理。</summary>
     public bool Start()
     {
         if (!this.nav.HasVnavmesh)
-        {
-            this.Say("没检测到 vnavmesh，无法自动走路。装好 vnavmesh 再试。");
-            return false;
-        }
+            this.Say("提示：没检测到 vnavmesh，将只用内置平滑移动（室内反而更稳）。");
 
         var (ceruleum, repair) = Workshop.ReadMaterials();
         if (ceruleum < 20 || repair < 15)
@@ -89,6 +92,7 @@ public sealed class SubmarineRunner
         this.currentSlot = -1;
         this.repairAttempts = 0;
         this.teleportAttempts = 0;
+        this.lastYesnoText = string.Empty;
         this.runStartedAt = DateTime.UtcNow;
         this.SetStage(RunnerStage.Decide, 0);
         this.Say("开始。");
@@ -121,8 +125,12 @@ public sealed class SubmarineRunner
             return;
 
         var strings = AddonHelper.ReadStrings(this.gui, AddonHelper.SelectYesno);
-        if (strings.Count > 0)
-            this.Say("自动确认：" + strings[0]);
+        var text = strings.Count > 0 ? strings[0] : string.Empty;
+        if (!string.IsNullOrEmpty(text) && text != this.lastYesnoText)
+        {
+            this.lastYesnoText = text;
+            this.Say("自动确认：" + text);
+        }
 
         AddonHelper.Fire(this.gui, AddonHelper.SelectYesno, 0);
     }
@@ -145,6 +153,16 @@ public sealed class SubmarineRunner
 
         if (DateTime.UtcNow < this.nextActionAt)
             return;
+
+        // 兜底轮询：SelectYesno 的 PostSetup 只有一次，而「要进入这间房屋吗？」这类
+        // 窗口在那一帧还没初始化完，回调会被吞掉、然后就一直卡着。
+        // 只要窗口还开着就每 0.4 秒补一次，直到它关掉为止。
+        if (AddonHelper.IsOpen(this.gui, AddonHelper.SelectYesno))
+        {
+            this.OnSelectYesno();
+            this.Delay(0.4);
+            return;
+        }
 
         switch (this.Stage)
         {
@@ -232,11 +250,18 @@ public sealed class SubmarineRunner
             return;
         }
 
-        if (!this.nav.Approach(entrance, this.config.InteractRange))
+        switch (this.nav.Approach(entrance, this.config.InteractRange))
         {
-            this.StatusText = "走向房屋入口…";
-            this.Delay(0.3);
-            return;
+            case ApproachState.Moving:
+                this.StatusText = "移动到房屋入口…";
+                this.Delay(0.2);
+                return;
+            case ApproachState.TooFar:
+                this.Fail("离房屋入口太远，先传送到住宅区再运行。");
+                return;
+            case ApproachState.Blocked:
+                this.Fail("房屋入口不可交互，靠近门口再试。");
+                return;
         }
 
         this.nav.Interact(entrance);
@@ -259,19 +284,26 @@ public sealed class SubmarineRunner
             return;
         }
 
-        var anchor = this.config.HasDoorAnchor ? this.config.DoorAnchor : this.nav.PlayerPosition;
-        var door = this.nav.FindEventObject(0, anchor, 8f);
+        var anchor = this.config.DoorAnchor;
+        var door = this.nav.FindEventObject(0, anchor, Configuration.DoorSearchRadius);
         if (door == null)
         {
-            this.Fail("找不到「移动到其他房间」的入口。站到门边执行 /subops learn door 记录位置。");
+            this.Fail("找不到「移动到其他房间」的入口。可执行 /subops objects 看看附近有什么，再用 /subops learn door 覆盖。");
             return;
         }
 
-        if (!this.nav.Approach(door, this.config.InteractRange))
+        switch (this.nav.Approach(door, this.config.InteractRange))
         {
-            this.StatusText = "走向房间切换点…";
-            this.Delay(0.3);
-            return;
+            case ApproachState.Moving:
+                this.StatusText = "移动到房间切换点…";
+                this.Delay(0.2);
+                return;
+            case ApproachState.TooFar:
+                this.Fail("离房间切换点太远（可能已不在房屋内），重新运行。");
+                return;
+            case ApproachState.Blocked:
+                this.Fail("房间切换点不可交互。");
+                return;
         }
 
         this.nav.Interact(door);
@@ -295,19 +327,30 @@ public sealed class SubmarineRunner
             return;
         }
 
-        var anchor = this.config.HasPanelAnchor ? this.config.PanelAnchor : this.nav.PlayerPosition;
-        var panel = this.nav.FindEventObject(0, anchor, 6f);
+        // 优先按名字找「航行管制面板」，名字对不上再退回坐标搜索。
+        var anchor = this.config.HasPanelAnchor ? this.config.PanelAnchor : default;
+        var panel = this.nav.FindEventObjectByName("航行", anchor, Configuration.PanelSearchRadius)
+                    ?? this.nav.FindEventObjectByName("潜水艇", anchor, Configuration.PanelSearchRadius)
+                    ?? this.nav.FindEventObject(0, anchor == default ? this.nav.PlayerPosition : anchor,
+                        Configuration.PanelSearchRadius);
         if (panel == null)
         {
-            this.Fail("找不到航行管制面板。站到面板前执行 /subops learn panel 记录位置。");
+            this.Fail("找不到航行管制面板。可执行 /subops objects 看看附近有什么，再用 /subops learn panel 覆盖。");
             return;
         }
 
-        if (!this.nav.Approach(panel, this.config.InteractRange))
+        switch (this.nav.Approach(panel, this.config.InteractRange))
         {
-            this.StatusText = "走向航行管制面板…";
-            this.Delay(0.3);
-            return;
+            case ApproachState.Moving:
+                this.StatusText = "移动到航行管制面板…";
+                this.Delay(0.2);
+                return;
+            case ApproachState.TooFar:
+                this.Fail("离航行管制面板太远，可能没进工房。");
+                return;
+            case ApproachState.Blocked:
+                this.Fail("航行管制面板不可交互。");
+                return;
         }
 
         this.nav.Interact(panel);
@@ -328,26 +371,22 @@ public sealed class SubmarineRunner
 
     private void Collect()
     {
-        if (AddonHelper.IsOpen(this.gui, AddonHelper.ExplorationResult))
+        if (AddonHelper.IsShown(this.gui, AddonHelper.ExplorationResult))
         {
             AddonHelper.Fire(this.gui, AddonHelper.ExplorationResult, 1);
             this.Delay(0.8);
             return;
         }
 
-        if (AddonHelper.IsOpen(this.gui, AddonHelper.ExplorationDetail))
+        var detailOpen = AddonHelper.IsShown(this.gui, AddonHelper.ExplorationDetail);
+
+        // 已经点过「出发」，窗口也消失了 = 这艘真的派出去了，这时才算处理完一艘。
+        if (!detailOpen && this.departFires > 0)
         {
-            // 出航前先修零件：耐久为 0 的零件会让「出发」失败。
-            if (this.TryRepairBeforeDeparture())
-                return;
-
-            if (this.config.ReDispatch)
-                AddonHelper.Fire(this.gui, AddonHelper.ExplorationDetail, 0);
-
-            AddonHelper.Close(this.gui, AddonHelper.ExplorationDetail);
             this.handled++;
             this.currentSlot = -1;
             this.repairAttempts = 0;
+            this.departFires = 0;
             this.StatusText = $"已处理 {this.handled} 艘";
 
             if (this.handled >= this.config.MaxLoops)
@@ -360,7 +399,35 @@ public sealed class SubmarineRunner
             return;
         }
 
-        if (!AddonHelper.IsOpen(this.gui, AddonHelper.SelectString))
+        if (detailOpen)
+        {
+            // 出航前先修零件：耐久为 0 的零件会让「出发」失败。
+            if (this.TryRepairBeforeDeparture())
+                return;
+
+            // 「出发」会连点两次：第一次是详情页的出发，第二次是
+            // 「确定要消耗桶装青磷水……」的确认框。所以这里不关窗、不计数，
+            // 每 tick 点一次，直到窗口自己消失。
+            if (this.config.ReDispatch && this.departFires < 5)
+            {
+                AddonHelper.Fire(this.gui, AddonHelper.ExplorationDetail, 0);
+                this.departFires++;
+                this.StatusText = $"出发确认（第 {this.departFires} 次）…";
+                this.Delay(1.2);
+                return;
+            }
+
+            // 点了 5 次还不走，认为卡住，关窗跳过，别把整轮堵死。
+            AddonHelper.Close(this.gui, AddonHelper.ExplorationDetail);
+            this.departFires = 0;
+            this.handled++;
+            this.currentSlot = -1;
+            this.StatusText = $"已处理 {this.handled} 艘（出发未确认，已跳过）";
+            this.Delay(2);
+            return;
+        }
+
+        if (!AddonHelper.IsShown(this.gui, AddonHelper.SelectString))
         {
             this.SetStage(RunnerStage.GoPanel, 1);
             return;
@@ -376,6 +443,7 @@ public sealed class SubmarineRunner
         AddonHelper.Fire(this.gui, AddonHelper.SelectString, slot);
         this.currentSlot = slot;
         this.repairAttempts = 0;
+        this.departFires = 0;
         this.StatusText = $"处理 {slot} 号槽位…";
         this.Delay(2);
     }

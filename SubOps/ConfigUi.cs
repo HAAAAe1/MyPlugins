@@ -455,13 +455,14 @@ public sealed class ConfigUi
     {
         var dirty = false;
 
-        ImGui.TextDisabled("第一次用要各记一次：站到房门 / 航行管制面板上，点对应的按钮。");
+        ImGui.TextDisabled("工房是独立副本房间，坐标全局一致，已内置默认值，正常不用动。");
+        ImGui.TextDisabled("只有找错了（比如自定义装修挡路）才需要站到目标前点「记录当前位置」覆盖。");
         ImGui.Spacing();
 
-        dirty |= this.DrawAnchor("房门锚点", this.config.HasDoorAnchor, this.config.DoorAnchor,
-            () => this.config.SetDoorAnchor(this.CurrentAnchor()));
-        dirty |= this.DrawAnchor("面板锚点", this.config.HasPanelAnchor, this.config.PanelAnchor,
-            () => this.config.SetPanelAnchor(this.CurrentAnchor()));
+        dirty |= this.DrawAnchor("房门锚点", this.config.DoorAnchor, this.config.HasDoorAnchor,
+            Configuration.BuiltinDoorAnchor, () => this.config.SetDoorAnchor(this.CurrentAnchor()));
+        dirty |= this.DrawAnchor("面板锚点", this.config.PanelAnchor, this.config.HasPanelAnchor,
+            null, () => this.config.SetPanelAnchor(this.CurrentAnchor()));
 
         ImGui.Separator();
         ImGui.Text("菜单下标（默认值按国服现行界面，认错了就改这里）");
@@ -485,14 +486,27 @@ public sealed class ConfigUi
         return dirty;
     }
 
-    private bool DrawAnchor(string label, bool has, Vector3 value, Action record)
+    private bool DrawAnchor(string label, Vector3 value, bool recorded, Vector3? builtin, Action record)
     {
         ImGui.Text($"{label}：");
         ImGui.SameLine();
-        if (has)
-            ImGui.Text($"({value.X:F2}, {value.Y:F2}, {value.Z:F2})");
+        ImGui.Text($"({value.X:F2}, {value.Y:F2}, {value.Z:F2})");
+
+        if (recorded)
+        {
+            ImGui.SameLine();
+            ImGui.TextDisabled("(手动覆盖)");
+        }
+        else if (builtin != null)
+        {
+            ImGui.SameLine();
+            ImGui.TextDisabled("(内置默认)");
+        }
         else
-            ImGui.TextDisabled("未记录");
+        {
+            ImGui.SameLine();
+            ImGui.TextDisabled("(未设置，按名字自动找)");
+        }
 
         ImGui.SameLine();
         if (ImGui.SmallButton($"记录当前位置##{label}"))
@@ -501,10 +515,10 @@ public sealed class ConfigUi
             return true;
         }
 
-        if (has)
+        if (recorded)
         {
             ImGui.SameLine();
-            if (ImGui.SmallButton($"清除##{label}"))
+            if (ImGui.SmallButton($"恢复默认##{label}"))
             {
                 if (label.StartsWith("房门", StringComparison.Ordinal))
                     this.config.SetDoorAnchor(Vector3.Zero);

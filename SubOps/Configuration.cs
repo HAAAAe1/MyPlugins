@@ -47,13 +47,29 @@ public sealed class Configuration : IPluginConfiguration
 
     public float DoorZ { get; set; }
 
+    /// <summary>
+    /// 部队工房是独立副本房间，所有部队的室内布局与坐标完全一致，
+    /// 所以「移动到其他房间」这个门的位置可以直接内置，不用每个用户自己记。
+    /// </summary>
+    public static readonly Vector3 BuiltinDoorAnchor = new(-841.40f, -6.66f, -779.00f);
+
+    /// <summary>房门锚点搜索半径（码）。</summary>
+    public const float DoorSearchRadius = 8f;
+
+    /// <summary>
+    /// 面板优先按名字找（名字里带「航行」），名字对不上时退回这个半径内的最近可交互物件。
+    /// 工房很小，30 码足够覆盖。
+    /// </summary>
+    public const float PanelSearchRadius = 30f;
+
     public bool HasPanelAnchor => this.PanelX != 0 || this.PanelY != 0 || this.PanelZ != 0;
 
     public bool HasDoorAnchor => this.DoorX != 0 || this.DoorY != 0 || this.DoorZ != 0;
 
     public Vector3 PanelAnchor => new(this.PanelX, this.PanelY, this.PanelZ);
 
-    public Vector3 DoorAnchor => new(this.DoorX, this.DoorY, this.DoorZ);
+    /// <summary>用户没记过就用内置坐标。</summary>
+    public Vector3 DoorAnchor => this.HasDoorAnchor ? new Vector3(this.DoorX, this.DoorY, this.DoorZ) : BuiltinDoorAnchor;
 
     public void SetPanelAnchor(Vector3 value)
     {
