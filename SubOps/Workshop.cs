@@ -74,21 +74,38 @@ public static unsafe class Workshop
         if (!InWorkshop)
             return result;
 
-        var data = HousingManager.Instance()->WorkshopTerritory->Submersible.Data;
-        for (var i = 0; i < data.Length; i++)
-        {
-            var sub = data[i];
-            string name;
-            try
-            {
-                name = sub.NameString;
-            }
-            catch
-            {
-                name = $"#{i}";
-            }
+        var manager = HousingManager.Instance();
+        if (manager == null)
+            return result;
 
-            result.Add(new Submarine(i, sub.RankId, name, sub.GetReturnTime()));
+        // IsInWorkshop() 为 true 时指针仍可能还没切过来（刚进屋那一两帧），
+        // 直接解引用会 AccessViolation 把游戏带崩。
+        var territory = manager->WorkshopTerritory;
+        if (territory == null)
+            return result;
+
+        try
+        {
+            var data = territory->Submersible.Data;
+            for (var i = 0; i < data.Length; i++)
+            {
+                var sub = data[i];
+                string name;
+                try
+                {
+                    name = sub.NameString;
+                }
+                catch
+                {
+                    name = $"#{i}";
+                }
+
+                result.Add(new Submarine(i, sub.RankId, name, sub.GetReturnTime()));
+            }
+        }
+        catch
+        {
+            // 指针失效就当作「还没读到」，调用方会重试。
         }
 
         return result;
