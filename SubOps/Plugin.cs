@@ -21,6 +21,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly IFramework framework;
     private readonly IClientState clientState;
     private readonly IChatGui chat;
+    private readonly IGameGui gui;
     private readonly IPluginLog log;
 
     private readonly Configuration configuration;
@@ -55,6 +56,7 @@ public sealed class Plugin : IDalamudPlugin
         this.framework = framework;
         this.clientState = clientState;
         this.chat = chat;
+        this.gui = gui;
         this.log = log;
 
         this.configuration = pluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
@@ -188,6 +190,20 @@ public sealed class Plugin : IDalamudPlugin
             case "obj":
             case "scan":
                 this.DumpObjects();
+                break;
+
+            case "y":
+            case "pos":
+            case "height":
+                this.DumpHeight();
+                break;
+
+            case "where":
+                this.DumpWhere();
+                break;
+
+            case "menu":
+                this.DumpMenu();
                 break;
 
             case "redist":
@@ -437,6 +453,9 @@ public sealed class Plugin : IDalamudPlugin
         this.chat.Print("  /subops run              只收当前这个角色");
         this.chat.Print("  /subops status           查看 4 个槽位状态与材料数量");
         this.chat.Print("  /subops objects          列出 40 码内可交互物件（校准用，结果也写进日志）");
+        this.chat.Print("  /subops where            列出当前开着的窗口（卡在哪一步时用）");
+        this.chat.Print("  /subops y                看脚下坐标与地板高度（检查有没有悬空）");
+        this.chat.Print("  /subops menu             列出当前选择菜单的每一项（菜单没匹配上时用）");
         this.chat.Print("  /subops learn door       覆盖房门坐标（一般不用，已内置默认值）");
         this.chat.Print("  /subops learn panel      覆盖面板坐标（一般不用，默认按名字自动找）");
         this.chat.Print("  /subops redist on|off    收完是否按原航线再次出航");
@@ -596,5 +615,73 @@ public sealed class Plugin : IDalamudPlugin
         }
 
         this.chat.Print("[SubOps] 站在房门/面板前，用 /subops learn door | /subops learn panel 记录。");
+    }
+
+    /// <summary>
+    /// 打印坐标与脚下地面高度。/subops y 用来确认「是不是悬空」：
+    /// 脚下 Y 和地板 Y 差得越多，人浮得越高。
+    /// </summary>
+    private void DumpHeight()
+    {
+        var pos = this.navigator.PlayerPosition;
+        var floor = this.navigator.FloorYAt(pos);
+        var last = this.navigator.LastTeleport;
+
+        this.chat.Print($"[SubOps] 脚下坐标 ({pos.X:F2}, {pos.Y:F2}, {pos.Z:F2})");
+        if (floor.HasValue)
+        {
+            var drop = pos.Y - floor.Value;
+            this.chat.Print($"[SubOps] 地板高度 {floor.Value:F2}，落差 {drop:+0.00;-0.00;0.00}");
+            if (drop > 0.5f)
+                this.chat.Print("[SubOps] 落差偏大：人在半空，重跑一次会自动贴地校正。");
+        }
+        else
+        {
+            this.chat.Print("[SubOps] 这块地方 vnavmesh 没网格，查不到地板高度（室内正常）。");
+        }
+
+        if (last.At != DateTime.MinValue)
+            this.chat.Print($"[SubOps] 上次瞬移落点 ({last.Destination.X:F2}, {last.Destination.Y:F2}, {last.Destination.Z:F2})，{DateTime.UtcNow - last.At:F1} 前");
+
+        this.log.Information($"[SubOps/y] pos=({pos.X:F2},{pos.Y:F2},{pos.Z:F2}) floor={floor?.ToString("F2") ?? "null"}");
+    }
+
+    /// <summary>
+    /// 打印当前阶段 + 所有可见窗口。卡住时执行 /subops where，
+    /// 就能看出「界面开着但插件没认出来」是哪个名字对不上。
+    /// </summary>
+    private void DumpWhere()
+    {
+        this.chat.Print($"[SubOps] 阶段 {this.runner.Stage} · {this.runner.StatusText}");
+        this.chat.Print($"[SubOps] 工房内={Workshop.InWorkshop} 屋内={Workshop.InHouse} 屋外={Workshop.Outdoors}");
+
+        var open = AddonHelper.ProbeVisible(
+            this.gui,
+            AddonHelper.SubmarineAddons
+                .Concat(new[] { AddonHelper.SelectString, AddonHelper.SelectYesno })
+                .ToArray());
+
+        this.chat.Print(open.Count == 0
+            ? "[SubOps] 潜艇/菜单类窗口：一个都没开"
+            : $"[SubOps] 开着：{string.Join("、", open)}");
+        this.log.Information($"[SubOps/where] open={string.Join(",", open)}");
+    }
+
+    /// <summary>把当前 SelectString 菜单的每一行打出来，用于核对「按文字匹配」有没有匹配上。</summary>
+    private void DumpMenu()
+    {
+        var entries = AddonHelper.ReadMenuEntries(this.gui);
+        if (entries.Count == 0)
+        {
+            this.chat.Print("[SubOps] 当前没有选择菜单（SelectString）。");
+            return;
+        }
+
+        this.chat.Print($"[SubOps] 菜单共 {entries.Count} 项：");
+        for (var i = 0; i < entries.Count; i++)
+        {
+            this.chat.Print($"  [{i}] {entries[i]}");
+            this.log.Information($"[SubOps/menu] [{i}] {entries[i]}");
+        }
     }
 }

@@ -29,9 +29,9 @@ public enum ApproachState
 
 /// <summary>
 /// 移动与交互。
-/// 主用「平滑瞬移」（逐帧把角色坐标推向目标，和 DailyRoutines 的 TPSmooth 同原理），
-/// 因为房屋/工房属于室内区域，vnavmesh 几乎没有可用网格，寻路在里面必失败。
-/// vnavmesh 只在距离较远的室外场景作为备选。
+/// 移动用「一步到位瞬移」：直接写 BattleChara 坐标，不做逐帧插值。
+/// vnavmesh 只用来查地板高度（Y 轴），不用它寻路——
+/// 住宅室内网格只有几 KB，寻路在里面必失败。
 /// </summary>
 public sealed unsafe class Navigator
 {
@@ -40,9 +40,20 @@ public sealed unsafe class Navigator
     private readonly IClientState clientState;
     private readonly IPluginLog log;
 
-    private readonly ICallGateSubscriber<Vector3, bool, object>? moveTo;
-    private readonly ICallGateSubscriber<bool>? isRunning;
-    private readonly ICallGateSubscriber<object>? stop;
+    /// <summary>地板高度查询（vnavmesh.Query.Mesh.PointOnFloor）。</summary>
+    private readonly ICallGateSubscriber<Vector3, bool, float, Vector3?>? pointOnFloor;
+
+    /// <summary>离目标最近的可站点（vnavmesh.Query.Mesh.NearestPoint）。</summary>
+    private readonly ICallGateSubscriber<Vector3, float, float, Vector3?>? nearestPoint;
+
+    /// <summary>vnavmesh 导航是否就绪（网格没建好时查询会返回空）。</summary>
+    private readonly ICallGateSubscriber<bool>? navReady;
+
+    /// <summary>停止寻路（万一有别的插件在跑路径，瞬移前掐掉）。</summary>
+    private readonly ICallGateSubscriber<object>? pathStop;
+
+    /// <summary>寻路是否在跑（只用于瞬移前清理，不用它走路）。</summary>
+    private readonly ICallGateSubscriber<bool>? pathRunning;
 
     public Navigator(IDalamudPluginInterface pluginInterface, IObjectTable objects, ITargetManager targets, IClientState clientState, IPluginLog log)
     {
@@ -51,21 +62,16 @@ public sealed unsafe class Navigator
         this.clientState = clientState;
         this.log = log;
 
-        try
-        {
-            this.moveTo = pluginInterface.GetIpcSubscriber<Vector3, bool, object>("vnavmesh.SimpleMove.PathfindAndMoveTo");
-            this.isRunning = pluginInterface.GetIpcSubscriber<bool>("vnavmesh.Path.IsRunning");
-            this.stop = pluginInterface.GetIpcSubscriber<object>("vnavmesh.Path.Stop");
-            this.HasVnavmesh = true;
-        }
-        catch (Exception ex)
-        {
-            this.HasVnavmesh = false;
-            this.log.Warning(ex, "未找到 vnavmesh，移动能力受限");
-        }
+        // 这些名字在 vnavmesh 0.8.x 上都存在；取不到时对应调用会抛异常，
+        // 所以每个查询都包了 try/catch，缺一个也不影响其它功能。
+        this.pointOnFloor = pluginInterface.GetIpcSubscriber<Vector3, bool, float, Vector3?>("vnavmesh.Query.Mesh.PointOnFloor");
+        this.nearestPoint = pluginInterface.GetIpcSubscriber<Vector3, float, float, Vector3?>("vnavmesh.Query.Mesh.NearestPoint");
+        this.navReady = pluginInterface.GetIpcSubscriber<bool>("vnavmesh.Nav.IsReady");
+        this.pathStop = pluginInterface.GetIpcSubscriber<object>("vnavmesh.Path.Stop");
+        this.pathRunning = pluginInterface.GetIpcSubscriber<bool>("vnavmesh.Path.IsRunning");
     }
 
-    public bool HasVnavmesh { get; }
+    public bool HasVnavmesh => this.pointOnFloor != null;
 
     public IGameObject? Player => this.objects.LocalPlayer;
 
@@ -73,30 +79,15 @@ public sealed unsafe class Navigator
 
     public float DistanceTo(Vector3 position) => this.Player == null ? float.MaxValue : Vector3.Distance(this.Player.Position, position);
 
-    /// <summary>寻路到指定点。fly = 是否可以飞（住宅区内一律 false）。</summary>
-    public void MoveTo(Vector3 position, bool fly = false)
-    {
-        if (!this.HasVnavmesh || this.moveTo == null)
-            return;
-
-        try
-        {
-            this.moveTo.InvokeAction(position, fly);
-        }
-        catch (Exception ex)
-        {
-            this.log.Warning(ex, "寻路调用失败");
-        }
-    }
-
+    /// <summary>有没有别的插件在跑寻路。瞬移前要掐掉，否则会被拉回去。</summary>
     public bool IsMoving()
     {
-        if (this.isRunning == null)
+        if (this.pathRunning == null)
             return false;
 
         try
         {
-            return this.isRunning.InvokeFunc();
+            return this.pathRunning.InvokeFunc();
         }
         catch
         {
@@ -104,11 +95,13 @@ public sealed unsafe class Navigator
         }
     }
 
+    /// <summary>停掉寻路（不走路，只为瞬移让路）。</summary>
     public void StopMoving()
     {
         try
         {
-            this.stop?.InvokeAction();
+            if (this.IsMoving())
+                this.pathStop?.InvokeAction();
         }
         catch
         {
@@ -197,95 +190,219 @@ public sealed unsafe class Navigator
     }
 
     /// <summary>
-    /// 逐帧把角色推向目标（平滑瞬移）。到达范围返回 true。
-    /// 原理同 DailyRoutines 的 TPSmooth：直接写 BattleChara 的位置，每帧一小步，
-    /// 服务器看到的就是「正常速度跑过去」，室内没有寻路网格也能走。
+    /// 直接瞬移到目标身边。一步到位，不做逐帧插值。
+    /// 返回 Arrived 表示已经在交互距离内、可以动手；
+    /// 返回 Moving 表示这一 tick 刚跳过去，等下一 tick 再动手（给客户端一帧落地时间）。
     /// </summary>
-    public bool SmoothTeleport(Vector3 target, float stopRange, float step = 1.2f)
-    {
-        var player = this.objects.LocalPlayer;
-        if (player == null)
-            return false;
-
-        var pos = player.Position;
-        var flat = new Vector3(target.X - pos.X, 0f, target.Z - pos.Z);
-        var flatDist = flat.Length();
-        if (flatDist <= stopRange)
-            return true;
-
-        // 只推到「差一点进范围」，避免在目标点上来回抖动。
-        var stepLen = MathF.Min(step, flatDist - stopRange * 0.5f);
-        if (stepLen <= 0.01f)
-            return true;
-
-        var dir = flat / flatDist;
-        var ratio = stepLen / flatDist;
-        var nextY = pos.Y + (target.Y - pos.Y) * ratio;
-
-        var chara = (FFXIVClientStructs.FFXIV.Client.Game.Character.BattleChara*)player.Address;
-        if (chara == null)
-            return false;
-
-        try
-        {
-            chara->SetPosition(pos.X + dir.X * stepLen, nextY, pos.Z + dir.Z * stepLen);
-        }
-        catch (Exception ex)
-        {
-            this.log.Warning(ex, "平滑移动失败");
-            return false;
-        }
-
-        return Vector3.Distance(player.Position, target) <= stopRange;
-    }
-
-    /// <summary>靠近目标对象。每帧调一次即可。</summary>
     public ApproachState Approach(IGameObject obj, float range)
     {
         if (obj == null || !obj.IsValid())
             return ApproachState.Blocked;
 
-        var distance = this.DistanceTo(obj.Position);
-        if (distance <= range)
+        return this.ApproachPosition(obj.Position, range);
+    }
+
+    /// <summary>直接瞬移到指定坐标。</summary>
+    public ApproachState ApproachPosition(Vector3 target, float range)
+    {
+        var player = this.Player;
+        if (player == null)
+            return ApproachState.Blocked;
+
+        var pos = player.Position;
+        var flatDist = FlatDistance(pos, target);
+
+        // 刚落点：先做一次贴地校正，再等一帧让客户端站稳。
+        // 这一步是"悬空"的兜底：不管前面 Y 怎么算的，只要脚下明显高于地面就压下去。
+        if (DateTime.UtcNow < this.settleUntil)
         {
-            this.StopMoving();
-            this.approachTargetId = 0;
-            return ApproachState.Arrived;
+            this.SnapToGround(player);
+            return ApproachState.Moving;
         }
 
-        // 超过 60 米说明不在同一个院子/房间里，硬推会穿图，必须先传送。
-        if (distance > MaxTeleportStep)
+        if (flatDist <= range)
+            return ApproachState.Arrived;
+
+        // 跨区域不能瞬移，交给上层先传送。
+        if (flatDist > MaxTeleportStep)
             return ApproachState.TooFar;
 
-        // 同一个目标连推 10 秒还没靠近 1 米，说明推不动（被事件锁定、位置被覆盖等），
-        // 直接判定失败，别在原地空转。
-        var id = obj.GameObjectId;
-        if (this.approachTargetId != id)
+        // 落到物件前方一点，而不是踩进模型里：朝向目标的方向退 range 的六成。
+        var dir = new Vector3((target.X - pos.X) / flatDist, 0f, (target.Z - pos.Z) / flatDist);
+        var stopBack = MathF.Min(range * 0.6f, MathF.Max(flatDist - 0.2f, 0f));
+        var landing = new Vector3(target.X - dir.X * stopBack, target.Y, target.Z - dir.Z * stopBack);
+
+        var dest = this.ResolveDestination(landing, flatDist);
+
+        var chara = (FFXIVClientStructs.FFXIV.Client.Game.Character.BattleChara*)player.Address;
+        if (chara == null)
+            return ApproachState.Blocked;
+
+        // 同一个目标反复瞬移却始终没靠近，说明位置被服务器/碰撞拉回了，别再死磕。
+        if (Vector3.Distance(this.jumpTarget, landing) <= 1.5f
+            && (DateTime.UtcNow - this.jumpAt).TotalSeconds < 8)
         {
-            this.approachTargetId = id;
-            this.approachBestDistance = distance;
-            this.approachProgressAt = DateTime.UtcNow;
+            this.jumpCount++;
         }
-        else if (distance < this.approachBestDistance - 1f)
+        else
         {
-            this.approachBestDistance = distance;
-            this.approachProgressAt = DateTime.UtcNow;
+            this.jumpCount = 0;
         }
-        else if ((DateTime.UtcNow - this.approachProgressAt).TotalSeconds > 10)
+
+        if (this.jumpCount > MaxJumpsPerTarget)
         {
-            this.approachTargetId = 0;
+            this.log.Warning($"[SubOps] 瞬移到 ({landing.X:F1}, {landing.Z:F1}) 反复失败，判定不可达");
+            this.jumpCount = 0;
             return ApproachState.Blocked;
         }
 
-        return this.SmoothTeleport(obj.Position, range) ? ApproachState.Arrived : ApproachState.Moving;
+        this.jumpTarget = landing;
+        this.jumpAt = DateTime.UtcNow;
+
+        this.StopMoving();
+
+        try
+        {
+            chara->SetPosition(dest.X, dest.Y, dest.Z);
+            chara->SetRotation(MathF.Atan2(dest.X - pos.X, dest.Z - pos.Z));
+        }
+        catch (Exception ex)
+        {
+            this.log.Warning(ex, "瞬移失败");
+            return ApproachState.Blocked;
+        }
+
+        this.settleUntil = DateTime.UtcNow.AddMilliseconds(250);
+        this.lastDestination = dest;
+        this.lastDestinationAt = DateTime.UtcNow;
+        return ApproachState.Moving;
     }
 
-    private ulong approachTargetId;
-    private float approachBestDistance = float.MaxValue;
-    private DateTime approachProgressAt = DateTime.UtcNow;
+    /// <summary>
+    /// 脚下明显高于地面时把人压回地面（只压、不抬，避免掉进地板）。
+    /// 用 vnavmesh 的地板查询；查不到或差值离谱就不动。
+    /// </summary>
+    private void SnapToGround(IGameObject player)
+    {
+        var pos = player.Position;
+        var floor = this.QueryFloorY(pos);
+        if (!floor.HasValue)
+            return;
 
-    /// <summary>单次推进的最大允许距离，防止跨区域乱飞。</summary>
-    public const float MaxTeleportStep = 60f;
+        var drop = pos.Y - floor.Value;
+        if (drop <= 0.15f || drop > FloorSanityLimit)
+            return;
+
+        var chara = (FFXIVClientStructs.FFXIV.Client.Game.Character.BattleChara*)player.Address;
+        if (chara == null)
+            return;
+
+        try
+        {
+            chara->SetPosition(pos.X, floor.Value, pos.Z);
+            this.log.Debug($"[SubOps] 落地校正 -{drop:F2}");
+        }
+        catch
+        {
+            // ignored
+        }
+    }
+
+    /// <summary>
+    /// 决定落点的 Y 轴。顺序：
+    /// ① vnavmesh 查到的地板高度（最准，住宅区室外有网格）；
+    /// ② 目标物件自身的 Y —— 门口、面板这些交互点都贴在地面上（实测
+    ///    「移动到其他房间」和「离开房屋」的 Y 都是 -0.02，与脚下 0.00 一致），
+    ///    只要和脚下差得不多就直接采用，顺便把轻微悬空纠回来；
+    /// ③ 差太多（挂在墙上的物件、不同楼层）就沿用脚下高度，绝不硬抬。
+    /// </summary>
+    private Vector3 ResolveDestination(Vector3 target, float flatDist)
+    {
+        var currentY = this.PlayerPosition.Y;
+
+        var floor = this.QueryFloorY(target);
+        if (floor.HasValue)
+            return new Vector3(target.X, floor.Value, target.Z);
+
+        if (flatDist <= SameRoomDistance)
+        {
+            var delta = target.Y - currentY;
+            return MathF.Abs(delta) <= FloorSnapRange
+                ? new Vector3(target.X, target.Y, target.Z)
+                : new Vector3(target.X, currentY, target.Z);
+        }
+
+        return target;
+    }
+
+    /// <summary>查目标点附近的地面高度，查不到返回 null。</summary>
+    private float? QueryFloorY(Vector3 target)
+    {
+        var currentY = this.PlayerPosition.Y;
+
+        try
+        {
+            if (this.navReady != null && !this.navReady.InvokeFunc())
+                return null;
+
+            // 只信「和脚下差不多高」的结果：室内网格很小，偶尔会返回离谱的值，
+            // 直接采用会把角色送上天。
+            var floor = this.pointOnFloor?.InvokeFunc(target, true, 3f);
+            if (floor.HasValue && MathF.Abs(floor.Value.Y - currentY) <= FloorSanityLimit)
+                return floor.Value.Y;
+
+            var near = this.nearestPoint?.InvokeFunc(target, 3f, 3f);
+            if (near.HasValue && MathF.Abs(near.Value.Y - currentY) <= FloorSanityLimit)
+                return near.Value.Y;
+
+            return null;
+        }
+        catch
+        {
+            // vnavmesh 没装/没就绪：走后面的兜底分支
+            return null;
+        }
+    }
+
+    private static float FlatDistance(Vector3 a, Vector3 b)
+    {
+        var dx = a.X - b.X;
+        var dz = a.Z - b.Z;
+        return MathF.Sqrt(dx * dx + dz * dz);
+    }
+
+    private DateTime settleUntil = DateTime.MinValue;
+    private Vector3 lastDestination;
+    private DateTime lastDestinationAt = DateTime.MinValue;
+
+    private Vector3 jumpTarget;
+    private DateTime jumpAt = DateTime.MinValue;
+    private int jumpCount;
+
+    /// <summary>同一个落点最多连续瞬移几次（超过判定为不可达）。</summary>
+    private const int MaxJumpsPerTarget = 5;
+
+    /// <summary>上次瞬移落点（诊断用）。</summary>
+    public (Vector3 Destination, DateTime At) LastTeleport => (this.lastDestination, this.lastDestinationAt);
+
+    /// <summary>
+    /// 这个距离以内视为「同一房间」，落点沿用脚下高度。
+    /// 房屋大厅到房门、工房入口到面板都在这个范围内，同一层地面高度一致，
+    /// 沿用脚下 Y 就不会被门牌/面板这些挂在墙上的物件吊到半空。
+    /// </summary>
+    public const float SameRoomDistance = 40f;
+
+    /// <summary>查某个点附近的地板高度（诊断用，查不到返回 null）。</summary>
+    public float? FloorYAt(Vector3 position) => this.QueryFloorY(position);
+
+    /// <summary>地板高度与脚下高度差超过这个值就不采信（防止把角色送上天）。</summary>
+    public const float FloorSanityLimit = 3f;
+
+    /// <summary>同一房间内，允许用目标物件的高度纠正脚下滑落的范围。</summary>
+    public const float FloorSnapRange = 2.5f;
+
+    /// <summary>单次瞬移允许的最大水平距离（同一区域内）。部队房区两个门之间可能隔上百米。</summary>
+    public const float MaxTeleportStep = 200f;
 
     public uint Territory => this.clientState.TerritoryType;
 }
