@@ -8,3 +8,7 @@
 
 # JSON 保持原样，不做换行转换
 *.json text eol=lf
+
+# 发布产物按二进制处理，禁止换行转换
+*.zip binary
+*.dll binary

@@ -26,7 +26,7 @@
     "LastUpdate": 1792771806,
     "DownloadCount": 0,
     "RepoUrl": "https://github.com/HAAAAe1/MyPlugins",
-    "DownloadLinkInstall": "https://github.com/HAAAAe1/MyPlugins/releases/download/subops-v0.2.0/SubOps.zip",
-    "DownloadLinkUpdate": "https://github.com/HAAAAe1/MyPlugins/releases/download/subops-v0.2.0/SubOps.zip"
+    "DownloadLinkInstall": "https://cdn.jsdelivr.net/gh/HAAAAe1/MyPlugins@v0.2.0/dist/SubOps.zip",
+    "DownloadLinkUpdate": "https://cdn.jsdelivr.net/gh/HAAAAe1/MyPlugins@v0.2.0/dist/SubOps.zip"
   }
 ]
