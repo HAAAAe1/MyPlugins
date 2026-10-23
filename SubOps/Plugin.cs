@@ -27,6 +27,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly SubmarineRunner runner;
     private readonly CharacterBook characters;
     private readonly CharacterSwitcher switcher;
+    private readonly ConfigUi configUi;
 
     private bool wasRunnerBusy;
 
@@ -68,10 +69,18 @@ public sealed class Plugin : IDalamudPlugin
             chat,
             log);
 
+        this.configUi = new ConfigUi(this.configuration, this.characters, this.switcher, this.runner, this.navigator, pluginInterface);
+
         this.commands.AddHandler(CommandName, new CommandInfo(this.OnCommand)
         {
-            HelpMessage = "潜水艇作业：/subops run | stop | status | multi on|off | char list | learn door|panel",
+            HelpMessage = "潜水艇作业：/subops | config | run | stop | status | multi on|off | char list | learn door|panel",
         });
+
+        // 卫月判据是 UiBuilder.HasConfigUi => OpenConfigUi != null，
+        // 不订阅这个事件，插件列表里根本不会出现齿轮按钮。
+        pluginInterface.UiBuilder.OpenConfigUi += this.configUi.Toggle;
+        pluginInterface.UiBuilder.OpenMainUi += this.configUi.Toggle;
+        pluginInterface.UiBuilder.Draw += this.configUi.Draw;
 
         this.addonLifecycle.RegisterListener(AddonEvent.PostSetup, AddonHelper.ExplorationResult, this.OnResultAddon);
         this.addonLifecycle.RegisterListener(AddonEvent.PostSetup, AddonHelper.SelectYesno, this.OnYesnoAddon);
@@ -83,6 +92,10 @@ public sealed class Plugin : IDalamudPlugin
 
     public void Dispose()
     {
+        this.pluginInterface.UiBuilder.Draw -= this.configUi.Draw;
+        this.pluginInterface.UiBuilder.OpenConfigUi -= this.configUi.Toggle;
+        this.pluginInterface.UiBuilder.OpenMainUi -= this.configUi.Toggle;
+
         this.framework.Update -= this.OnUpdate;
         this.clientState.Login -= this.OnLogin;
         this.addonLifecycle.UnregisterListener(this.OnResultAddon);
@@ -144,6 +157,12 @@ public sealed class Plugin : IDalamudPlugin
 
         switch (verb)
         {
+            case "config":
+            case "ui":
+            case "settings":
+                this.configUi.Toggle();
+                break;
+
             case "run":
                 this.runner.Start();
                 break;
@@ -404,6 +423,7 @@ public sealed class Plugin : IDalamudPlugin
     private void PrintHelp()
     {
         this.chat.Print("[SubOps] 用法：");
+        this.chat.Print("  /subops config           打开配置窗口（功能同插件列表里的「设置」按钮）");
         this.chat.Print("  /subops auto             一键：从名册第一个角色开始，逐个收/修/出航/切下一个");
         this.chat.Print("  /subops stop             中断（同时停掉轮换）");
         this.chat.Print("  /subops run              只收当前这个角色");

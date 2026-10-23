@@ -53,10 +53,31 @@ dotnet build -c Release
 
 然后在游戏里 `/xlplugins` → 开发插件里加载。
 
+## 配置窗口
+
+插件列表里点 SubOps 的「设置」（齿轮）按钮，或者打 `/subops config`。
+
+> 卫月显示齿轮的判据是 `UiBuilder.HasConfigUi => OpenConfigUi != null`，
+> 所以插件必须订阅 `pluginInterface.UiBuilder.OpenConfigUi`。只写窗口不订阅，
+> 插件列表里就是没有设置按钮，也不会有任何报错。
+
+四个页签：
+
+| 页签 | 内容 |
+| --- | --- |
+| 潜水艇名册 | 每个角色一行，列出它 4 个槽位的等级与返航时间（这就是「登记了哪些」）；可勾选启用、置顶、移除 |
+| 当前角色 | 实时读工房：4 艘艇的状态/返航/每个零件耐久 + 青磷水与修理材料 |
+| 行为 | 收完是否再出航、出航前自动修理、跳过没返航的角色、收完登出、提前量 |
+| 校准 | 房门/面板锚点的记录与清除、两个菜单下标 |
+
+名册里的数据来自每次进工房时拍的快照（`SnapshotAt`），所以没进过工房的角色会显示「未采集」。
+实时数据每秒刷新一次，不在工房时读不到。
+
 ## 命令
 
 | 命令 | 作用 |
 | --- | --- |
+| `/subops config` | 打开配置窗口（同插件列表里的设置按钮） |
 | `/subops run` | 开始收：判断所在位置 → 进屋 → 进工房 → 开面板 → 逐艘确认 |
 | `/subops stop` | 中断，并停掉寻路 |
 | `/subops status` | 打印 4 个槽位状态（等级 / 是否返航）与材料数量 |
@@ -93,7 +114,8 @@ SubOps/
 ├─ SubmarineRunner.cs   状态机：Decide → Teleport → GoEntrance → PickRoom → GoPanel → OpenList → Collect
 ├─ CharacterProfile.cs  单角色的潜水艇快照（4 槽）与「该不该去」的判定
 ├─ CharacterBook.cs     角色名册：识别当前角色、自动登记、在工房拍快照
-└─ CharacterSwitcher.cs 轮换调度：按名册顺序一站一站走（切号走 Lifestream IPC）
+├─ CharacterSwitcher.cs 轮换调度：按名册顺序一站一站走（切号走 Lifestream IPC）
+└─ ConfigUi.cs          配置窗口（ImGui）：名册 / 实时状态 / 行为 / 校准
 ```
 
 ### 关键接口（改代码时最常用）

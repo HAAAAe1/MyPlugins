@@ -2,22 +2,31 @@
   {
     "Name": "SubOps",
     "InternalName": "SubOps",
-    "AssemblyVersion": "0.1.0.0",
+    "AssemblyVersion": "0.2.0.0",
     "Author": "HAAAAe1",
     "Punchline": "部队工房潜水艇作业：一键收取、自动修理、重新委派",
     "Description": "读取部队工房 4 艘潜水艇的返航时间与零件耐久，自动进屋、开航行管制面板、逐艘确认收取，出航前自动修理耐久为 0 的零件，最后按原航线再次委派。支持多角色轮换：从名册第一个角色开始逐个处理，收完自动切下一个。",
-    "Changelog": "首个版本：自动收取、自动修理、按原航线重新委派、多角色轮换。",
+    "Changelog": "新增配置窗口：潜水艇名册（4 槽位等级/返航）、当前角色实时状态与零件耐久、行为开关、锚点校准。",
     "ApplicableVersion": "any",
     "LoadPriority": 0,
-    "Tags": ["潜水艇", "工房", "部队", "submarine", "workshop", "fc"],
-    "CategoryTags": ["utility"],
+    "Tags": [
+      "潜水艇",
+      "工房",
+      "部队",
+      "submarine",
+      "workshop",
+      "fc"
+    ],
+    "CategoryTags": [
+      "utility"
+    ],
     "DalamudApiLevel": 15,
     "AcceptsFeedback": true,
     "IsHide": false,
-    "LastUpdate": 1792715195,
+    "LastUpdate": 1792771806,
     "DownloadCount": 0,
     "RepoUrl": "https://github.com/HAAAAe1/MyPlugins",
-    "DownloadLinkInstall": "https://github.com/HAAAAe1/MyPlugins/releases/download/subops-v0.1.0/SubOps.zip",
-    "DownloadLinkUpdate": "https://github.com/HAAAAe1/MyPlugins/releases/download/subops-v0.1.0/SubOps.zip"
+    "DownloadLinkInstall": "https://github.com/HAAAAe1/MyPlugins/releases/download/subops-v0.2.0/SubOps.zip",
+    "DownloadLinkUpdate": "https://github.com/HAAAAe1/MyPlugins/releases/download/subops-v0.2.0/SubOps.zip"
   }
 ]
