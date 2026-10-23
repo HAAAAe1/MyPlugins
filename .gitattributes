@@ -1,0 +1,10 @@
+# shell 脚本必须保持 LF，否则在 Git Bash / CI 里会因为 \r 报 "bad interpreter"
+*.sh text eol=lf
+
+# C# 源码统一 LF，避免 diff 噪声
+*.cs   text eol=lf
+*.csproj text eol=lf
+*.props  text eol=lf
+
+# JSON 保持原样，不做换行转换
+*.json text eol=lf
