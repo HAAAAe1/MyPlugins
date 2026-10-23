@@ -3,3 +3,6 @@ _logs
 _logs.zip
 _tmp.cjs
 latest.zip
+SubOps.zip
+bin/
+obj/
