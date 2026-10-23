@@ -141,6 +141,9 @@ public sealed class SubmarineRunner
     /// <summary>确认框上次点击的时间（点完冷却一小会儿，别一帧点十下）。</summary>
     private DateTime yesnoFiredAt = DateTime.MinValue;
 
+    /// <summary>同一个确认框连续点了多少次（防死循环）。</summary>
+    private int yesnoSameCount;
+
     public SubmarineRunner(Configuration config, Navigator nav, IGameGui gui, ICondition condition, IChatGui chat)
     {
         this.config = config;
@@ -276,15 +279,22 @@ public sealed class SubmarineRunner
         // 于是「要进入这间房屋吗？」摆在那里两三秒才被点，看起来就像反应很慢。
         if (AddonHelper.IsShown(this.gui, AddonHelper.SelectYesno))
         {
+            // 同一个确认框连点 10 下还没关掉，就别再和它纠缠了，
+            // 让状态机继续跑（超时兜底会负责收场）。
+            if (this.yesnoSameCount > 10)
+                return;
+
             if ((DateTime.UtcNow - this.yesnoFiredAt).TotalMilliseconds < 200)
                 return;
 
             this.yesnoFiredAt = DateTime.UtcNow;
+            this.yesnoSameCount++;
             this.OnSelectYesno();
             return;
         }
 
         this.yesnoFiredAt = DateTime.MinValue;
+        this.yesnoSameCount = 0;
 
         if (DateTime.UtcNow < this.nextActionAt)
             return;

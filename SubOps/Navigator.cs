@@ -474,7 +474,12 @@ public sealed unsafe class Navigator
         if (flatDist <= SameRoomDistance)
             return new Vector3(target.X, currentY, target.Z);
 
-        return target;
+        // 跨房间时也只信「不比脚下高」的 Y：面板、柜台这类物件的 Y 在台面上，
+        // 采信它就会把角色摆到柜子上。
+        return new Vector3(
+            target.X,
+            target.Y <= currentY + RaiseTolerance ? target.Y : currentY,
+            target.Z);
     }
 
     /// <summary>查目标点附近的地面高度，查不到返回 null。</summary>
