@@ -410,6 +410,14 @@ public sealed class CharacterSwitcher
         if ((now - this.pendingSince).TotalSeconds < SwitchTimeoutSeconds)
             return;
 
+        // 照 AutoRetainer 的做法：Lifestream 还在忙（排队 / 读图 / 过场）就继续等，
+        // 别在人家正在切的时候判失败——那样会把好角色打上冷却，白跳一趟。
+        if (this.LifestreamBusy() && (now - this.pendingSince).TotalSeconds < SwitchTimeoutSeconds * 2)
+        {
+            this.nextActionAt = now.AddSeconds(5);
+            return;
+        }
+
         // 超时：给目标角色上冷却，跳到下一个。
         var target = this.book.FindByKey(this.pendingTarget);
         if (target != null)
