@@ -60,6 +60,7 @@ public sealed class Plugin : IDalamudPlugin
         this.log = log;
 
         this.configuration = pluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
+        this.configuration.Migrate();
         this.navigator = new Navigator(pluginInterface, objects, targets, clientState, log);
         this.runner = new SubmarineRunner(this.configuration, this.navigator, gui, condition, chat);
         this.characters = new CharacterBook(this.configuration, clientState, playerState, chat, log);
@@ -200,6 +201,12 @@ public sealed class Plugin : IDalamudPlugin
 
             case "where":
                 this.DumpWhere();
+                break;
+
+            case "room":
+            case "event":
+            case "events":
+                this.DumpRoomEvents();
                 break;
 
             case "menu":
@@ -454,6 +461,7 @@ public sealed class Plugin : IDalamudPlugin
         this.chat.Print("  /subops status           查看 4 个槽位状态与材料数量");
         this.chat.Print("  /subops objects          列出 40 码内可交互物件（校准用，结果也写进日志）");
         this.chat.Print("  /subops where            列出当前开着的窗口（卡在哪一步时用）");
+        this.chat.Print("  /subops room             看「房间切换点 / 航行管制面板」两个事件有没有读到（进屋后不动时用）");
         this.chat.Print("  /subops y                看脚下坐标与地板高度（检查有没有悬空）");
         this.chat.Print("  /subops menu             列出当前选择菜单的每一项（菜单没匹配上时用）");
         this.chat.Print("  /subops learn door       覆盖房门坐标（一般不用，已内置默认值）");
@@ -665,6 +673,37 @@ public sealed class Plugin : IDalamudPlugin
             ? "[SubOps] 潜艇/菜单类窗口：一个都没开"
             : $"[SubOps] 开着：{string.Join("、", open)}");
         this.log.Information($"[SubOps/where] open={string.Join(",", open)}");
+    }
+
+    /// <summary>
+    /// 打印「房间里到底有没有那两个关键事件」。
+    /// /subops room 用于「进屋后不动」这种情况：能看出是事件表没读到，
+    /// 还是读到了但坐标不对。
+    /// </summary>
+    private void DumpRoomEvents()
+    {
+        var pos = this.navigator.PlayerPosition;
+        this.chat.Print($"[SubOps] 位置 ({pos.X:F2}, {pos.Y:F2}, {pos.Z:F2})  territory={this.navigator.Territory}");
+        this.chat.Print($"[SubOps] 工房内={Workshop.InWorkshop} 屋内={Workshop.InHouse} 屋外={Workshop.Outdoors}");
+
+        this.DumpOneEvent("移动到其他房间", 721074, pos);
+        this.DumpOneEvent("航行管制面板", 3276843, pos);
+    }
+
+    private void DumpOneEvent(string label, uint eventId, System.Numerics.Vector3 playerPos)
+    {
+        if (!this.navigator.TryFindEventObject(eventId, out var found))
+        {
+            var line = $"[SubOps] {label}（{eventId}）：事件表里没找到";
+            this.chat.Print(line);
+            this.log.Information($"[SubOps/room] {line}");
+            return;
+        }
+
+        var distance = System.Numerics.Vector3.Distance(playerPos, found.Position);
+        var text = $"[SubOps] {label}（{eventId}）：({found.Position.X:F2}, {found.Position.Y:F2}, {found.Position.Z:F2}) 距 {distance:F1} 码，物件 {found.ObjectCount} 个";
+        this.chat.Print(text);
+        this.log.Information($"[SubOps/room] {text}");
     }
 
     /// <summary>把当前 SelectString 菜单的每一行打出来，用于核对「按文字匹配」有没有匹配上。</summary>

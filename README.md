@@ -7,7 +7,7 @@
 1. 打开 **Dalamud 设置 → 实验性功能 → 自定义插件库**
 2. 添加以下地址：
    ```
-   https://cdn.jsdelivr.net/gh/HAAAAe1/MyPlugins@main/pluginmaster.json
+   https://raw.githubusercontent.com/HAAAAe1/MyPlugins/main/pluginmaster.json
    ```
 3. 点击页面顶部的 **保存**
 4. 打开 **Dalamud 插件管理器**，即可浏览/安装本仓库中的插件
@@ -18,7 +18,7 @@
 
 | 名称 | 版本 | 说明 |
 |------|------|------|
-| **SubOps** | 0.5.1 | 部队工房潜水艇作业：一键收取、自动修理、重新委派，支持多角色轮换。带配置窗口（名册 / 实时状态 / 行为 / 校准）。场景移动用瞬移，不需要 vnavmesh；切角色需要 Lifestream |
+| **SubOps** | 0.5.2 | 部队工房潜水艇作业：一键收取、自动修理、重新委派，支持多角色轮换。带配置窗口（名册 / 实时状态 / 行为 / 校准）。场景移动用瞬移，不需要 vnavmesh；切角色需要 Lifestream |
 
 ## 说明
 
@@ -32,7 +32,7 @@
   `inventory` / `sound` / `social` / `utility`（大小写不敏感）。
 - `ApplicableVersion` 填 `"any"` 是合法的，表示不限制游戏版本。
 - 第三方仓库**不能覆盖**官方仓库里已存在的 `InternalName`，同名条目会被整条丢弃（安全策略）。
-- 仓库地址必须返回**原始 JSON**（jsDelivr 这类），填 GitHub 网页地址会解析失败。
+- 仓库地址必须返回**原始 JSON**（`raw.githubusercontent.com` 这种），填 GitHub 网页地址会解析失败。
 
 ## 发布 SubOps
 
@@ -40,15 +40,14 @@
 不匹配、容易编译失败，所以 SubOps 一律本地构建发布：
 
 ```bash
-./scripts/release-subops.sh 0.5.1
+./scripts/release-subops.sh 0.5.2
 ```
 
 脚本依次做：改 `SubOps.csproj` 的 `Version` → 编译 → 校验产物清单里的 `AssemblyVersion`
 是否和期望一致（不一致就停）→ 打包 → 回写 `pluginmaster.json`
 的 `AssemblyVersion`、两个 `DownloadLink`、`LastUpdate`。
 
-发完记得：提交 → 打 tag `vX.Y.Z` → 推送 → 刷新 jsDelivr 缓存
-（`https://purge.jsdelivr.net/gh/HAAAAe1/MyPlugins@main/pluginmaster.json`）。
+发完记得：提交 → 打 tag `vX.Y.Z` → 推送。订阅走 raw，提交后立刻生效，不用等缓存。
 
 `SubOps/Directory.Build.props` 会自动适配：国服机器指向 `XIVLauncherCN` 的 Hooks，
 没装国服的环境（比如 GitHub Actions）回落到 SDK 默认路径。

@@ -44,6 +44,12 @@ public sealed class SubmarineRunner
     /// <summary>部队房屋入口（庭院里那扇门）的 DataId。DR 用的就是这个常量。</summary>
     private const uint HouseEntranceDataId = 2002737;
 
+    /// <summary>房屋大厅里「移动到其他房间」的事件 ID（DailyRoutines 用的同一个）。</summary>
+    private const uint RoomSelectEventId = 721074;
+
+    /// <summary>部队工房里「航行管制面板」的事件 ID。</summary>
+    private const uint PanelEventId = 3276843;
+
     /// <summary>「移动到别的房间」的交互点子类型，用于在黑名单命中后换下一个候选。</summary>
     private const int MaxDoorCandidates = 6;
 
@@ -96,6 +102,18 @@ public sealed class SubmarineRunner
     /// <summary>上一次交互的房门 ObjectId（用于在没反应时拉黑它）。</summary>
     private ulong currentDoorId;
 
+    /// <summary>本次运行里点过多少次「移动到其他房间」。</summary>
+    private int roomInteractions;
+
+    /// <summary>「事件表里找不到房间入口」的次数，用来决定要不要退回逐个试门。</summary>
+    private int roomEventAttempts;
+
+    /// <summary>是否已经退回到「逐个试门」的兜底模式。</summary>
+    private bool useBruteDoors;
+
+    /// <summary>兜底模式下「附近连一个候选门都没有」的连续次数。</summary>
+    private int bruteMisses;
+
     public SubmarineRunner(Configuration config, Navigator nav, IGameGui gui, ICondition condition, IChatGui chat)
     {
         this.config = config;
@@ -129,6 +147,12 @@ public sealed class SubmarineRunner
         this.lookupRetries = 0;
         this.doorCursor = 0;
         this.badDoors.Clear();
+        this.roomInteractions = 0;
+        this.roomEventAttempts = 0;
+        this.useBruteDoors = false;
+        this.bruteMisses = 0;
+        this.doorInteractAt = DateTime.MinValue;
+        this.currentDoorId = 0;
         this.lastYesnoText = string.Empty;
         this.runStartedAt = DateTime.UtcNow;
         this.SetStage(RunnerStage.Decide, 0);
@@ -348,13 +372,16 @@ public sealed class SubmarineRunner
 
     /// <summary>
     /// 房屋大厅 → 部队工房。
-    /// 大厅里「移动到别的房间」和「离开房屋」是两扇长得一样的门，
-    /// 所以这里不再盲目点最近的那个，而是挨个试：交互后没能弹出房间菜单的，
-    /// 拉黑换下一个。
+    ///
+    /// 定位方式和 DailyRoutines 一致：翻游戏的事件表，找 EventId = 721074
+    /// （「移动到其他房间」）挂着的那个物件，拿到它的坐标直接瞬移过去，再交互。
+    /// 之前是按内置坐标找「附近 8 码内的门」，一旦坐标对不上（换房子、或者用过
+    /// /subops learn 把面板坐标记成了房门坐标）就一个候选都没有，于是进屋后
+    /// 原地不动、什么也不做——这就是「进房间以后根本没传送」的原因。
     /// </summary>
     private void PickRoom()
     {
-        // 房间菜单已经弹出：按文字挑「工房」。
+        // ① 房间菜单已经弹出：按文字挑「工房」。
         if (AddonHelper.IsShown(this.gui, AddonHelper.SelectString))
         {
             var entries = AddonHelper.ReadMenuEntries(this.gui);
@@ -378,29 +405,96 @@ public sealed class SubmarineRunner
             return;
         }
 
-        // 上一步交互了门但什么都没弹出来：判定这扇不是房间切换点，拉黑换下一个。
+        // ② 按事件 ID 找「移动到其他房间」，瞬移过去再点开。
+        if (this.nav.TryFindEventObject(RoomSelectEventId, out var room))
+        {
+            this.roomEventAttempts = 0;
+            this.useBruteDoors = false;
+
+            if (this.nav.Distance3D(room.Position) > 1.6f)
+            {
+                this.StatusText = "瞬移到房间切换点…";
+
+                switch (this.nav.ApproachPosition(room.Position, 1.2f))
+                {
+                    case ApproachState.TooFar:
+                        this.Fail("离房间切换点太远，先传送回部队房屋。");
+                        return;
+                    case ApproachState.Blocked:
+                        this.Fail("房间切换点过不去。");
+                        return;
+                }
+
+                this.Delay(0.35);
+                return;
+            }
+
+            this.nav.InteractRaw(room.Address);
+            this.roomInteractions++;
+            this.StatusText = $"点开房间菜单…（第 {this.roomInteractions} 次）";
+
+            if (this.roomInteractions > 6)
+            {
+                this.Fail("点了 6 次「移动到其他房间」都没弹菜单，可能是界面被别的插件挡住，或者这栋房子没有工房。");
+                return;
+            }
+
+            this.Delay(1.2);
+            return;
+        }
+
+        // ③ 事件表里找不到（刚进屋那一帧事件还没注册 / 户型不同 / 事件 ID 变了）：
+        //    先等几拍，实在没有就退回「逐个试门」。
+        if (!this.useBruteDoors)
+        {
+            this.roomEventAttempts++;
+            if (this.roomEventAttempts <= 6)
+            {
+                this.StatusText = "等房间入口加载…";
+                this.Delay(0.5);
+                return;
+            }
+
+            this.useBruteDoors = true;
+            this.Say("事件表里没有 721074，改成逐个试附近的门。");
+        }
+
+        this.BruteForceRoomDoor();
+    }
+
+    /// <summary>
+    /// 兜底：把附近的可交互物件挨个点一遍。
+    /// 点完 3 秒没弹出房间菜单就拉黑换下一个——「离开房屋」那扇门会被排除掉，
+    /// 再加上确认框里含「离开」一律点「否」，不会再出现「进屋又自己出去」。
+    /// </summary>
+    private void BruteForceRoomDoor()
+    {
         if (this.doorInteractAt != DateTime.MinValue
             && (DateTime.UtcNow - this.doorInteractAt).TotalSeconds > 3)
         {
             this.doorInteractAt = DateTime.MinValue;
 
             if (this.currentDoorId != 0 && this.badDoors.Add(this.currentDoorId))
-            {
-                this.doorCursor = 0;
-                this.Say($"这扇门不通房间菜单，已排除（累计 {this.badDoors.Count} 扇）");
-            }
+                this.Say($"这扇门没弹房间菜单，已排除（累计 {this.badDoors.Count} 扇）");
             else
-            {
                 this.doorCursor++;
-            }
         }
 
         var door = this.PickDoor();
         if (door == null)
         {
-            this.Fail("找不到「移动到其他房间」的入口。可执行 /subops objects 看看附近有什么，再用 /subops learn door 覆盖。");
+            if (this.bruteMisses++ < 6)
+            {
+                this.StatusText = "等房间入口加载…";
+                this.Delay(1);
+                return;
+            }
+
+            this.Fail("找不到「移动到其他房间」的入口。执行 /subops room 把事件表与附近的物件发我。");
             return;
         }
+
+        this.bruteMisses = 0;
 
         switch (this.nav.Approach(door, this.config.InteractRange))
         {
@@ -422,12 +516,10 @@ public sealed class SubmarineRunner
         this.Delay(1.2);
     }
 
-    /// <summary>按锚点距离排序列出候选门，跳过已拉黑的。</summary>
+    /// <summary>按距离列出候选门，跳过已拉黑的。</summary>
     private IGameObject? PickDoor()
     {
-        var anchor = this.config.DoorAnchor;
-
-        var candidates = this.nav.EventObjectsNear(anchor, Configuration.DoorSearchRadius)
+        var candidates = this.nav.EventObjectsNear(this.nav.PlayerPosition, 60f)
             .Where(x => !this.badDoors.Contains((ulong)x.GameObjectId))
             .ToList();
 
@@ -448,8 +540,38 @@ public sealed class SubmarineRunner
             return;
         }
 
-        var panel = this.FindPanel();
-        if (panel == null)
+        // 和进屋同一个思路：按事件 ID 找面板物件，瞬移过去点开。
+        if (this.nav.TryFindEventObject(PanelEventId, out var panel))
+        {
+            this.lookupRetries = 0;
+
+            if (this.nav.Distance3D(panel.Position) > 1.6f)
+            {
+                this.StatusText = "瞬移到航行管制面板…";
+
+                switch (this.nav.ApproachPosition(panel.Position, 1.2f))
+                {
+                    case ApproachState.TooFar:
+                        this.Fail("离航行管制面板太远，可能没进工房。");
+                        return;
+                    case ApproachState.Blocked:
+                        this.Fail("航行管制面板过不去。");
+                        return;
+                }
+
+                this.Delay(0.35);
+                return;
+            }
+
+            this.nav.InteractRaw(panel.Address);
+            this.StatusText = "打开航行管制面板…";
+            this.SetStage(RunnerStage.Collect, 1.5);
+            return;
+        }
+
+        // 兜底：按名字找（"航行管制面板"）。
+        var named = this.FindPanel();
+        if (named == null)
         {
             if (this.lookupRetries++ < MaxLookupRetries)
             {
@@ -459,13 +581,13 @@ public sealed class SubmarineRunner
             }
 
             this.lookupRetries = 0;
-            this.Fail("找不到航行管制面板。可执行 /subops objects 看看附近有什么，再用 /subops learn panel 覆盖。");
+            this.Fail("找不到航行管制面板。执行 /subops room 把事件表和附近物件发我。");
             return;
         }
 
         this.lookupRetries = 0;
 
-        switch (this.nav.Approach(panel, this.config.InteractRange))
+        switch (this.nav.Approach(named, this.config.InteractRange))
         {
             case ApproachState.Moving:
                 this.StatusText = "瞬移到航行管制面板…";
@@ -479,7 +601,7 @@ public sealed class SubmarineRunner
                 return;
         }
 
-        this.nav.Interact(panel);
+        this.nav.Interact(named);
         this.StatusText = "打开航行管制面板…";
         this.SetStage(RunnerStage.Collect, 1.5);
     }
@@ -490,12 +612,16 @@ public sealed class SubmarineRunner
     /// </summary>
     private IGameObject? FindPanel()
     {
-        var anchor = this.config.HasPanelAnchor ? this.config.PanelAnchor : default;
+        // 记过锚点、而且锚点就在附近才用；否则一律以脚下为圆心找，
+        // 免得旧配置里存了别处的坐标把搜索半径带偏。
+        var configured = this.config.HasPanelAnchor ? this.config.PanelAnchor : default;
+        var anchor = configured != default && this.nav.Distance3D(configured) <= 50f
+            ? configured
+            : this.nav.PlayerPosition;
 
         return this.nav.FindEventObjectByName("航行", anchor, Configuration.PanelSearchRadius)
                ?? this.nav.FindEventObjectByName("管制", anchor, Configuration.PanelSearchRadius)
-               ?? this.nav.EventObjectsNear(anchor == default ? this.nav.PlayerPosition : anchor,
-                       Configuration.PanelSearchRadius)
+               ?? this.nav.EventObjectsNear(anchor, Configuration.PanelSearchRadius)
                    .FirstOrDefault();
     }
 

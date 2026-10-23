@@ -8,6 +8,7 @@ using Dalamud.Plugin;
 using Dalamud.Plugin.Ipc;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game.Control;
+using FFXIVClientStructs.FFXIV.Client.Game.Event;
 
 namespace SubOps;
 
@@ -125,6 +126,87 @@ public sealed unsafe class Navigator
         var result = system->InteractWithObject(native, true);
         return result != 0;
     }
+
+    /// <summary>直接对原生 GameObject 指针交互（对象表里未必查得到，事件对象走这条）。</summary>
+    public unsafe bool InteractRaw(nint address)
+    {
+        if (address == 0)
+            return false;
+
+        var system = TargetSystem.Instance();
+        if (system == null)
+            return false;
+
+        return system->InteractWithObject((FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject*)address, true) != 0;
+    }
+
+    /// <summary>水平面之外还带上高度差的距离（判断「到没到门口」用）。</summary>
+    public float Distance3D(Vector3 position)
+    {
+        var player = this.Player;
+        return player == null ? float.MaxValue : Vector3.Distance(player.Position, position);
+    }
+
+    /// <summary>
+    /// 按 EventId 在当前区域里找事件对象。
+    /// 这是 DailyRoutines 的做法：直接翻 EventFramework 的事件表，
+    /// 找到「移动到其他房间」/「航行管制面板」对应的那个物件，拿它的坐标去瞬移。
+    /// 好处是完全不需要维护坐标表，换房子、换布局都不用改。
+    /// </summary>
+    public unsafe bool TryFindEventObject(uint eventId, out EventObjectRef found)
+    {
+        found = default;
+
+        try
+        {
+            var framework = EventFramework.Instance();
+            if (framework == null)
+                return false;
+
+            FFXIVClientStructs.FFXIV.Client.Game.Event.EventHandler* handler = null;
+            var objectCount = 0;
+
+            foreach (var pair in framework->EventHandlerModule.EventHandlerMap)
+            {
+                var candidate = pair.Item2.Value;
+                if (candidate == null)
+                    continue;
+
+                if (candidate->Info.EventId.Id != eventId)
+                    continue;
+
+                handler = candidate;
+                objectCount = candidate->EventObjects.Count;
+                break;
+            }
+
+            if (handler == null)
+                return false;
+
+            foreach (var pointer in handler->EventObjects)
+            {
+                var go = pointer.Value;
+                if (go == null)
+                    continue;
+
+                // 同一个事件可能挂了多个物件（每个房间一扇门），取第一个即可，
+                // 反正都在同一栋房子里。
+                found = new EventObjectRef(go->Position, (ulong)go->GetGameObjectId(), (nint)go, objectCount);
+                return true;
+            }
+
+            found = new EventObjectRef(Vector3.Zero, 0, 0, objectCount);
+            return false;
+        }
+        catch (Exception ex)
+        {
+            this.log.Warning(ex, "[SubOps] 读事件表失败");
+            return false;
+        }
+    }
+
+    /// <summary>事件对象：坐标、对象 ID、原生地址，以及这个事件一共挂了几个物件（诊断用）。</summary>
+    public readonly record struct EventObjectRef(Vector3 Position, ulong ObjectId, nint Address, int ObjectCount);
 
     /// <summary>
     /// 找一个事件对象（EventObj）。

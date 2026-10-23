@@ -12,7 +12,22 @@ namespace SubOps;
 public sealed class Configuration : IPluginConfiguration
 {
     /// <summary>Dalamud 要求的配置版本号，结构变化时递增以做迁移。</summary>
-    public int Version { get; set; } = 3;
+    public int Version { get; set; } = 4;
+
+    /// <summary>
+    /// 老版本（&lt; 4）会把「面板坐标」顺手记成房门坐标，导致进屋后按这个坐标
+    /// 在 8 码内找门永远找不到、于是就原地不动。0.5.2 起改为按事件 ID 定位，
+    /// 坐标表已经不用了，这里把它们清空，免得旧数据继续捣乱。
+    /// </summary>
+    public void Migrate()
+    {
+        if (this.Version >= 4)
+            return;
+
+        this.DoorX = this.DoorY = this.DoorZ = 0f;
+        this.PanelX = this.PanelY = this.PanelZ = 0f;
+        this.Version = 4;
+    }
 
     /// <summary>与目标对象交互的距离阈值（码）。</summary>
     public float InteractRange { get; set; } = 2.5f;
@@ -51,7 +66,7 @@ public sealed class Configuration : IPluginConfiguration
     /// 部队工房是独立副本房间，所有部队的室内布局与坐标完全一致，
     /// 所以「移动到其他房间」这个门的位置可以直接内置，不用每个用户自己记。
     /// </summary>
-    public static readonly Vector3 BuiltinDoorAnchor = new(-841.40f, -6.66f, -779.00f);
+    public static readonly Vector3 BuiltinDoorAnchor = new(-3.62f, -0.02f, -5.23f);
 
     /// <summary>房门锚点搜索半径（码）。</summary>
     public const float DoorSearchRadius = 8f;

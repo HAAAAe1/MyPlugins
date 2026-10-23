@@ -17,7 +17,22 @@ public static unsafe class Workshop
         get
         {
             var manager = HousingManager.Instance();
-            return manager != null && manager->WorkshopTerritory != null;
+            if (manager == null)
+                return false;
+
+            // 游戏自己的判定（HousingManager.IsInWorkshop），比看指针稳：
+            // 指针在「刚进屋那一帧」可能还没切过来。
+            try
+            {
+                if (manager->IsInWorkshop())
+                    return true;
+            }
+            catch
+            {
+                // 特征码没解析出来时退回指针判断
+            }
+
+            return manager->WorkshopTerritory != null;
         }
     }
 
@@ -27,7 +42,10 @@ public static unsafe class Workshop
         get
         {
             var manager = HousingManager.Instance();
-            return manager != null && manager->IndoorTerritory != null;
+            if (manager == null || InWorkshop)
+                return false;
+
+            return manager->IndoorTerritory != null;
         }
     }
 
