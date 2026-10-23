@@ -114,6 +114,33 @@ public sealed class SubmarineRunner
     /// <summary>兜底模式下「附近连一个候选门都没有」的连续次数。</summary>
     private int bruteMisses;
 
+    /// <summary>
+    /// 每个槽位本轮是否已经处理完（收完报告 + 已派出）。
+    /// 必须按槽位记，不能只看「窗口关没关」——那样会在菜单里原地打转。
+    /// </summary>
+    private readonly bool[] slotDone = new bool[4];
+
+    /// <summary>该槽位是否已经点过「上次的远航报告」（点过一次就算，避免死循环）。</summary>
+    private readonly bool[] slotReportTried = new bool[4];
+
+    /// <summary>该槽位是否真的看到并确认过远航报告窗口（= 真的收完了）。</summary>
+    private readonly bool[] slotReportSeen = new bool[4];
+
+    /// <summary>该槽位在单艘艇菜单里点过多少次，超上限就跳过这艘。</summary>
+    private readonly int[] slotMenuFires = new int[4];
+
+    /// <summary>是否进入「收尾」：只按退出/取消关窗口，不再重新打开任何菜单。</summary>
+    private bool finishing;
+
+    /// <summary>收尾阶段按了多少次退出。</summary>
+    private int exitClicks;
+
+    /// <summary>面板交互失败后换角度重试的次数。</summary>
+    private int panelAttempts;
+
+    /// <summary>确认框上次点击的时间（点完冷却一小会儿，别一帧点十下）。</summary>
+    private DateTime yesnoFiredAt = DateTime.MinValue;
+
     public SubmarineRunner(Configuration config, Navigator nav, IGameGui gui, ICondition condition, IChatGui chat)
     {
         this.config = config;
@@ -154,6 +181,18 @@ public sealed class SubmarineRunner
         this.doorInteractAt = DateTime.MinValue;
         this.currentDoorId = 0;
         this.lastYesnoText = string.Empty;
+        this.yesnoFiredAt = DateTime.MinValue;
+        this.finishing = false;
+        this.exitClicks = 0;
+        this.panelAttempts = 0;
+        for (var i = 0; i < 4; i++)
+        {
+            this.slotDone[i] = false;
+            this.slotReportTried[i] = false;
+            this.slotReportSeen[i] = false;
+            this.slotMenuFires[i] = 0;
+        }
+
         this.runStartedAt = DateTime.UtcNow;
         this.SetStage(RunnerStage.Decide, 0);
         this.Say("开始。");
@@ -232,18 +271,23 @@ public sealed class SubmarineRunner
         if (this.condition[ConditionFlag.OccupiedInCutSceneEvent] || this.condition[ConditionFlag.WatchingCutscene])
             return;
 
-        if (DateTime.UtcNow < this.nextActionAt)
-            return;
-
-        // 兜底轮询：SelectYesno 的 PostSetup 只有一次，而「要进入这间房屋吗？」这类
-        // 窗口在那一帧还没初始化完，回调会被吞掉、然后就一直卡着。
-        // 只要窗口还开着就每 0.4 秒补一次，直到它关掉为止。
-        if (AddonHelper.IsOpen(this.gui, AddonHelper.SelectYesno))
+        // 确认框必须排在最前面、并且不受「动作间隔」限制。
+        // 之前它排在 nextActionAt 之后：交互完门要等 3 秒才轮到处理确认框，
+        // 于是「要进入这间房屋吗？」摆在那里两三秒才被点，看起来就像反应很慢。
+        if (AddonHelper.IsShown(this.gui, AddonHelper.SelectYesno))
         {
+            if ((DateTime.UtcNow - this.yesnoFiredAt).TotalMilliseconds < 200)
+                return;
+
+            this.yesnoFiredAt = DateTime.UtcNow;
             this.OnSelectYesno();
-            this.Delay(0.4);
             return;
         }
+
+        this.yesnoFiredAt = DateTime.MinValue;
+
+        if (DateTime.UtcNow < this.nextActionAt)
+            return;
 
         switch (this.Stage)
         {
@@ -376,8 +420,9 @@ public sealed class SubmarineRunner
         this.nav.Interact(entrance);
         this.StatusText = "进入房屋…";
 
-        // 进屋要读条 + 换场景，给足时间；Decide 会重新判断位置。
-        this.SetStage(RunnerStage.Decide, 3);
+        // 点完门马上就会弹「要进入这间房屋吗？」。这里只给 1.2 秒的冷却，
+        // 剩下的交给 Decide 判场景；再长就会拖慢确认框的响
+        this.SetStage(RunnerStage.Decide, 1.2);
     }
 
     /// <summary>
@@ -546,36 +591,36 @@ public sealed class SubmarineRunner
         // 面板菜单已经弹出。
         if (AddonHelper.IsShown(this.gui, AddonHelper.SelectString))
         {
+            this.panelAttempts = 0;
             this.SetStage(RunnerStage.Collect, 0);
             return;
         }
 
-        // 和进屋同一个思路：按事件 ID 找面板物件，瞬移过去点开。
+        // 和进屋同一个思路：按事件 ID 找面板物件，走到面板前的地面再点开。
         if (this.nav.TryFindEventObject(PanelEventId, out var panel))
         {
             this.lookupRetries = 0;
 
-            if (this.nav.Distance3D(panel.Position) > 1.6f)
+            if (this.panelAttempts > 7)
             {
-                this.StatusText = "瞬移到航行管制面板…";
+                this.Fail("面板点了 8 次都没开。可能站位被家具挡住，先手动站到面板前再 /subops run。");
+                return;
+            }
 
-                switch (this.nav.ApproachPosition(panel.Position, 1.2f))
-                {
-                    case ApproachState.TooFar:
-                        this.Fail("离航行管制面板太远，可能没进工房。");
-                        return;
-                    case ApproachState.Blocked:
-                        this.Fail("航行管制面板过不去。");
-                        return;
-                }
-
-                this.Delay(0.35);
+            // 站到面板前 2.2 米处（每次失败换个 90° 角度）。
+            // 不要直接瞬移到面板坐标：面板的 Y 在柜面高度，人会站到柜台上，
+            // 交互反而打不开——这就是「瞬移到柜台里、面板打不开」的原因。
+            if (this.nav.ApproachStand(panel.Position, 2.2f, this.panelAttempts) != ApproachState.Arrived)
+            {
+                this.StatusText = "走到航行管制面板前…";
+                this.Delay(0.25);
                 return;
             }
 
             this.nav.InteractRaw(panel.Address);
+            this.panelAttempts++;
             this.StatusText = "打开航行管制面板…";
-            this.SetStage(RunnerStage.Collect, 1.5);
+            this.SetStage(RunnerStage.Collect, 1.2);
             return;
         }
 
@@ -597,23 +642,17 @@ public sealed class SubmarineRunner
 
         this.lookupRetries = 0;
 
-        switch (this.nav.Approach(named, this.config.InteractRange))
+        if (this.nav.ApproachStand(named.Position, 2.2f, this.panelAttempts) != ApproachState.Arrived)
         {
-            case ApproachState.Moving:
-                this.StatusText = "瞬移到航行管制面板…";
-                this.Delay(0.2);
-                return;
-            case ApproachState.TooFar:
-                this.Fail("离航行管制面板太远，可能没进工房。");
-                return;
-            case ApproachState.Blocked:
-                this.Fail("航行管制面板不可交互。");
-                return;
+            this.StatusText = "走到航行管制面板前…";
+            this.Delay(0.25);
+            return;
         }
 
         this.nav.Interact(named);
+        this.panelAttempts++;
         this.StatusText = "打开航行管制面板…";
-        this.SetStage(RunnerStage.Collect, 1.5);
+        this.SetStage(RunnerStage.Collect, 1.2);
     }
 
     /// <summary>
@@ -635,66 +674,149 @@ public sealed class SubmarineRunner
                    .FirstOrDefault();
     }
 
+    /// <summary>
+    /// 收艇 / 修理 / 再出发。
+    ///
+    /// 按「当前开着哪个窗口」来驱动，而不是按「点过什么」来猜：
+    ///   远航报告窗口 → 点确认收取（点到了才算真收完）
+    ///   出航确认窗口 → 修零件 → 点出发 → 关窗
+    ///   菜单窗口     → 面板主菜单 / 单艘艇菜单 / 艇列表 三种分别处理
+    ///   什么都没开   → 还有艇要处理就回面板，没了就退出收尾
+    ///
+    /// 每艘艇的完成状态记在 slotDone[] 里，靠游戏里的返航时间判断「还有没有要处理的」，
+    /// 不会出现「刚点开始就以为全收完了」。
+    /// </summary>
     private void Collect()
     {
-        // 已点过出发、且所有流程窗口都关了 = 这艘真的派出去了，这时才计一艘。
-        if (this.departFires > 0 && !this.AnyVoyageWindowOpen())
+        // ⓪ 收尾阶段：把还开着的菜单一层层关掉，关干净了就结束这一轮。
+        if (this.finishing)
         {
-            this.handled++;
-            this.currentSlot = -1;
-            this.repairAttempts = 0;
-            this.departFires = 0;
-            this.StatusText = $"已处理 {this.handled} 艘";
-
-            if (this.handled >= this.config.MaxLoops)
+            if (AddonHelper.IsShown(this.gui, AddonHelper.SelectString))
             {
-                this.Finish($"达到轮数上限，先停下（共 {this.handled} 艘）");
+                this.HandleSelectMenu();
                 return;
             }
 
-            // 列表窗口通常还开着，直接在列表里选下一艘；关了就回面板重开。
-            this.SetStage(RunnerStage.Collect, 2);
+            this.Finish(this.handled > 0 ? $"全部处理完（共 {this.handled} 艘）" : "没有已返航的艇");
             return;
         }
 
-        // ① 远航报告窗口。1 = 确认并收起报告（DailyRoutines 同款）。
+        // ① 远航报告：1 = 确认收取。这是「真的收到」的唯一凭据。
         if (AddonHelper.IsShown(this.gui, AddonHelper.ExplorationResult))
         {
             AddonHelper.Fire(this.gui, AddonHelper.ExplorationResult, 1);
-            this.StatusText = "收取远航报告…";
-            this.Delay(1.5);
+
+            if (this.currentSlot is >= 0 and < 4)
+                this.slotReportSeen[this.currentSlot] = true;
+
+            this.StatusText = this.currentSlot is >= 0 and < 4
+                ? $"确认收取 {this.currentSlot + 1} 号艇的远航报告…"
+                : "确认收取远航报告…";
+            this.Delay(1.2);
             return;
         }
 
-        // ② 出航详情页：先修零件，再点出发。
+        // ② 出航确认页：先修耐久为 0 的零件，再点「出发」。
         if (AddonHelper.IsShown(this.gui, AddonHelper.ExplorationDetail))
         {
             if (this.config.AutoRepair && this.TryRepairParts())
                 return;
 
+            if (!this.config.ReDispatch)
+            {
+                AddonHelper.Close(this.gui, AddonHelper.ExplorationDetail);
+                this.MarkSlotDone(this.currentSlot, "已收取（不重新出航）");
+                this.Delay(1.2);
+                return;
+            }
+
             AddonHelper.Fire(this.gui, AddonHelper.ExplorationDetail, 0);
             AddonHelper.Close(this.gui, AddonHelper.ExplorationDetail);
-            this.departFires++;
-            this.StatusText = $"出发 {this.currentSlot + 1} 号艇…";
-            this.Delay(2);
+            this.MarkSlotDone(
+                this.currentSlot,
+                this.slotReportSeen[Math.Clamp(this.currentSlot, 0, 3)] ? "已收取并再次出航" : "已出航");
+            this.Delay(2.2);
             return;
         }
 
-        // ③ 选择菜单。
+        // ③ 菜单：面板主菜单 / 单艘艇菜单 / 艇列表。
         if (AddonHelper.IsShown(this.gui, AddonHelper.SelectString))
         {
             this.HandleSelectMenu();
             return;
         }
 
-        // ④ 什么都没开：回去点面板。
-        this.SetStage(RunnerStage.GoPanel, 1);
+        // ④ 窗口都关了：没剩下要处理的就收尾，否则回去点面板。
+        if (this.NoSlotLeft())
+        {
+            this.finishing = true;
+            this.StatusText = "没有待处理的艇了，关闭面板…";
+            this.Delay(0.4);
+            return;
+        }
+
+        this.SetStage(RunnerStage.GoPanel, 0.6);
     }
 
-    private bool AnyVoyageWindowOpen() =>
-        AddonHelper.IsShown(this.gui, AddonHelper.ExplorationResult) ||
-        AddonHelper.IsShown(this.gui, AddonHelper.ExplorationDetail) ||
-        AddonHelper.IsShown(this.gui, AddonHelper.SelectString);
+    /// <summary>把某个槽位标记为本轮已处理完。</summary>
+    private void MarkSlotDone(int slot, string reason)
+    {
+        this.departFires = 0;
+        this.repairAttempts = 0;
+
+        if (slot is >= 0 and < 4 && !this.slotDone[slot])
+        {
+            this.slotDone[slot] = true;
+            this.handled++;
+            this.Say($"{slot + 1} 号艇：{reason}（本轮第 {this.handled} 艘）");
+
+            if (this.handled >= this.config.MaxLoops)
+            {
+                this.Say($"达到轮数上限 {this.config.MaxLoops}，收尾。");
+                this.finishing = true;
+            }
+        }
+
+        this.currentSlot = -1;
+        this.StatusText = $"已处理 {this.handled} 艘";
+    }
+
+    /// <summary>游戏里还有没有「已返航、且本轮没处理过」的槽位。</summary>
+    private bool NoSlotLeft()
+    {
+        var subs = Workshop.Read();
+        if (subs.Count == 0)
+            return false; // 数据没读到，别急着收尾
+
+        foreach (var sub in subs)
+        {
+            if (sub.IsBack && sub.Slot is >= 0 and < 4 && !this.slotDone[sub.Slot])
+                return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>下一个要处理的槽位（已返航 + 本轮没处理过），没有返回 -1。</summary>
+    private int NextSlotToDo()
+    {
+        var subs = Workshop.Read();
+        if (subs.Count == 0)
+            return -1;
+
+        foreach (var sub in subs)
+        {
+            if (!sub.IsBack)
+                continue;
+
+            if (sub.Slot is >= 0 and < 4 && this.slotDone[sub.Slot])
+                continue;
+
+            return sub.Slot;
+        }
+
+        return -1;
+    }
 
     /// <summary>
     /// 在详情页里修损坏零件。用的是游戏的 RepairSubmarinePart(1153) 命令，
@@ -730,98 +852,167 @@ public sealed class SubmarineRunner
     }
 
     /// <summary>
-    /// 处理 SelectString。只有两种情况会走到这里：
-    /// ① 面板主菜单（「管理潜水艇」…）
-    /// ② 潜水艇列表（4 艘艇）
-    /// 靠「菜单项能不能匹配到艇名 / 是不是 4 项」区分，比认标题文字稳。
+    /// 处理 SelectString。这里有三种完全不同的菜单，靠菜单文字区分：
+    /// ① 面板主菜单（「管理潜水艇」…）→ 进列表
+    /// ② 单艘艇菜单（出发 / 上次的远航报告 / 更换配件 / 修理配件 / … / 退出）→ 收报告、再出发
+    /// ③ 艇列表（4 项，就是 4 艘艇）→ 选一艘要处理的
+    ///
+    /// 收尾阶段（finishing）只按退出，不再重新打开任何菜单。
     /// </summary>
     private void HandleSelectMenu()
     {
         var entries = AddonHelper.ReadMenuEntries(this.gui);
         if (entries.Count == 0)
         {
-            this.Delay(0.3);
+            this.Delay(0.25);
             return;
         }
 
+        // ── 收尾：一路按退出，把列表 → 主菜单 → 关闭 逐层关干净 ──
+        if (this.finishing)
+        {
+            var close = AddonHelper.FindMenuEntry(entries, "退出");
+            if (close < 0)
+                close = AddonHelper.FindMenuEntry(entries, "取消");
+            if (close < 0)
+                close = entries.Count - 1;
+
+            if (this.exitClicks >= 5)
+            {
+                this.Finish($"全部处理完（共 {this.handled} 艘）");
+                return;
+            }
+
+            AddonHelper.Fire(this.gui, AddonHelper.SelectString, close);
+            this.exitClicks++;
+            this.StatusText = $"关闭面板…（第 {this.exitClicks} 次退出）";
+            this.Delay(0.9);
+            return;
+        }
+
+        // ── ① 面板主菜单 ──
         var manage = AddonHelper.FindMenuEntry(entries, "管理潜水艇");
         if (manage < 0)
             manage = AddonHelper.FindMenuEntry(entries, "管理潛水艇");
+        if (manage < 0)
+        {
+            for (var i = 0; i < entries.Count; i++)
+            {
+                if (entries[i].Contains("潜水艇", StringComparison.Ordinal)
+                    && entries[i].Contains("管理", StringComparison.Ordinal))
+                {
+                    manage = i;
+                    break;
+                }
+            }
+        }
+
         if (manage >= 0)
         {
             AddonHelper.Fire(this.gui, AddonHelper.SelectString, manage);
             this.StatusText = "打开潜水艇列表…";
+            this.Delay(1.2);
+            return;
+        }
+
+        // ── ② 单艘艇菜单 ──
+        var depart = AddonHelper.FindMenuEntry(entries, "出发");
+        var report = AddonHelper.FindMenuEntry(entries, "远航报告");
+        if (depart >= 0 || report >= 0)
+        {
+            this.HandleVesselMenu(entries, depart, report);
+            return;
+        }
+
+        // ── ③ 艇列表 ──
+        var next = this.NextSlotToDo();
+        var subs = Workshop.Read();
+        var looksLikeVesselList = entries.Count >= 4
+                                  || subs.Any(s => !string.IsNullOrWhiteSpace(s.Name)
+                                                   && entries.Any(e => e.Contains(s.Name, StringComparison.Ordinal)));
+
+        if (next >= 0 && looksLikeVesselList)
+        {
+            AddonHelper.Fire(this.gui, AddonHelper.SelectString, next);
+            this.currentSlot = next;
+            this.repairAttempts = 0;
+            this.slotMenuFires[next] = 0;
+            this.slotReportTried[next] = false;
+            this.slotReportSeen[next] = false;
+            this.StatusText = $"处理 {next + 1} 号艇…";
             this.Delay(1.5);
             return;
         }
 
-        // 艇列表：按下标直接选（= 槽位），DR 也是这么干的。
-        var slot = this.PickVesselSlot(entries);
-        if (slot >= 0)
-        {
-            AddonHelper.Fire(this.gui, AddonHelper.SelectString, slot);
-            this.currentSlot = slot;
-            this.repairAttempts = 0;
-            this.StatusText = $"处理 {slot + 1} 号槽位…";
-            this.Delay(1.8);
-            return;
-        }
-
-        // 列表里已经没有被收的艇了：收工。
-        if (entries.Count >= 4 && this.handled > 0)
-        {
-            this.Finish($"全部收完，共 {this.handled} 艘");
-            return;
-        }
-
-        var quit = AddonHelper.FindMenuEntry(entries, "取消");
-        if (quit < 0)
-            quit = AddonHelper.FindMenuEntry(entries, "やめる");
-        if (quit >= 0)
-        {
-            AddonHelper.Fire(this.gui, AddonHelper.SelectString, quit);
-            this.Delay(1);
-            return;
-        }
-
-        this.Delay(0.5);
+        // 列表里没有要处理的了：进入收尾，逐层退出。
+        this.finishing = true;
+        this.StatusText = "没有待处理的艇了，关闭面板…";
+        this.Delay(0.3);
     }
 
     /// <summary>
-    /// 在菜单里找一艘该处理的艇，返回它在菜单里的下标（= 槽位）。
-    ///
-    /// 先按「艇名匹配 + 已返航」挑；艇名读不到时退化成「4 项列表里第一个
-    /// 还没处理过的槽位」，保证不会因为名字对不上就卡死。
+    /// 单艘艇菜单。顺序必须是「先看报告、再出发」：
+    /// 只有真的把远航报告确认掉，才算这艘收完了。
     /// </summary>
-    private int PickVesselSlot(List<string> entries)
+    private void HandleVesselMenu(List<string> entries, int depart, int report)
     {
-        var subs = Workshop.Read();
+        var slot = this.currentSlot;
+        var valid = slot is >= 0 and < 4;
 
-        foreach (var sub in subs)
+        // 这艘已经处理完、菜单还没关掉的残影：直接退出回列表，绝对不能再点一次出发。
+        if (!valid)
         {
-            if (!sub.IsBack || string.IsNullOrWhiteSpace(sub.Name))
-                continue;
+            var back = AddonHelper.FindMenuEntry(entries, "退出");
+            if (back < 0)
+                back = AddonHelper.FindMenuEntry(entries, "取消");
+            if (back < 0)
+                back = entries.Count - 1;
 
-            if (sub.Slot == this.currentSlot)
-                continue;
+            if (back >= 0)
+                AddonHelper.Fire(this.gui, AddonHelper.SelectString, back);
 
-            var index = AddonHelper.FindMenuEntry(entries, sub.Name);
-            if (index >= 0)
-                return index;
+            this.Delay(0.8);
+            return;
         }
 
-        // 名字对不上（国服译名差异 / 自定义名）：只要菜单正好是 4 项，
-        // 就按槽位顺序找下一个已返航的。
-        if (entries.Count == 4)
+        var fires = this.slotMenuFires[slot];
+
+        // ① 报告：点一次「上次的远航报告」。有没有报告，点完就知道——
+        //    有报告会弹出远航报告窗口（Collect 里点确认）；
+        //    没有报告菜单不会变，1.2 秒后自动转到「出发」。
+        if (valid && !this.slotReportTried[slot] && report >= 0)
         {
-            foreach (var sub in subs)
-            {
-                if (sub.IsBack && sub.Slot != this.currentSlot)
-                    return sub.Slot;
-            }
+            AddonHelper.Fire(this.gui, AddonHelper.SelectString, report);
+            this.slotReportTried[slot] = true;
+            this.slotMenuFires[slot]++;
+            this.StatusText = $"打开 {slot + 1} 号艇的远航报告…";
+            this.Delay(1.2);
+            return;
         }
 
-        return -1;
+        // ② 出发：打开出航确认页，真正的「出发」在那边点。
+        if (depart >= 0 && fires <= 5)
+        {
+            AddonHelper.Fire(this.gui, AddonHelper.SelectString, depart);
+            if (valid)
+                this.slotMenuFires[slot]++;
+
+            this.departFires++;
+            this.StatusText = $"打开 {slot + 1} 号艇的出航确认…";
+            this.Delay(1.2);
+            return;
+        }
+
+        // ③ 点不动（材料不够 / 艇在航行中）：退出这艘，别把整轮拖死。
+        var quit = AddonHelper.FindMenuEntry(entries, "退出");
+        if (quit < 0)
+            quit = AddonHelper.FindMenuEntry(entries, "取消");
+        if (quit >= 0)
+            AddonHelper.Fire(this.gui, AddonHelper.SelectString, quit);
+
+        this.Say($"{slot + 1} 号艇点不动「出发」（可能材料不足），跳过。");
+        this.MarkSlotDone(slot, "跳过");
+        this.Delay(1.0);
     }
 
     /// <summary>按 DataId 找事件对象（房屋入口用）。</summary>

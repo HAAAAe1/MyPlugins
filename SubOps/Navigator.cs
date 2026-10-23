@@ -299,6 +299,49 @@ public sealed unsafe class Navigator
         return this.ApproachPosition(obj.Position, range);
     }
 
+    /// <summary>
+    /// 站到目标的「交互位」上：以目标为圆心、standOff 为半径，取靠近玩家这一侧的点。
+    /// attempt 用来在第一次失败后换个角度再试（0 = 玩家这一侧，1/2/3 = 依次转 90°）。
+    ///
+    /// 面板这类物件必须这么处理：直接瞬移到物件坐标 = 站到柜台上，
+    /// 交互打不开（人卡在模型里），而且 Y 会被物件高度顶起来。
+    /// </summary>
+    public ApproachState ApproachStand(Vector3 target, float standOff, int attempt)
+    {
+        var player = this.Player;
+        if (player == null)
+            return ApproachState.Blocked;
+
+        var pos = player.Position;
+        var dx = pos.X - target.X;
+        var dz = pos.Z - target.Z;
+        var len = MathF.Sqrt((dx * dx) + (dz * dz));
+
+        float angle;
+        if (len < 0.05f)
+        {
+            // 玩家正好在物件里：没有方向可用，从正面开始试。
+            angle = 0f;
+        }
+        else
+        {
+            angle = MathF.Atan2(dx, dz);
+        }
+
+        angle += attempt * (MathF.PI / 2f);
+
+        var stand = new Vector3(
+            target.X + (MathF.Sin(angle) * standOff),
+            target.Y,
+            target.Z + (MathF.Cos(angle) * standOff));
+
+        // 已经站好了就别再动，避免来回抖。
+        if (FlatDistance(pos, stand) <= 0.7f)
+            return ApproachState.Arrived;
+
+        return this.ApproachPosition(stand, 0.8f);
+    }
+
     /// <summary>直接瞬移到指定坐标。</summary>
     public ApproachState ApproachPosition(Vector3 target, float range)
     {
@@ -325,6 +368,9 @@ public sealed unsafe class Navigator
             return ApproachState.TooFar;
 
         // 落到物件前方一点，而不是踩进模型里：朝向目标的方向退 range 的六成。
+        if (flatDist < 0.01f)
+            return ApproachState.Arrived;
+
         var dir = new Vector3((target.X - pos.X) / flatDist, 0f, (target.Z - pos.Z) / flatDist);
         var stopBack = MathF.Min(range * 0.6f, MathF.Max(flatDist - 0.2f, 0f));
         var landing = new Vector3(target.X - dir.X * stopBack, target.Y, target.Z - dir.Z * stopBack);
@@ -407,11 +453,11 @@ public sealed unsafe class Navigator
 
     /// <summary>
     /// 决定落点的 Y 轴。顺序：
-    /// ① vnavmesh 查到的地板高度（最准，住宅区室外有网格）；
-    /// ② 目标物件自身的 Y —— 门口、面板这些交互点都贴在地面上（实测
-    ///    「移动到其他房间」和「离开房屋」的 Y 都是 -0.02，与脚下 0.00 一致），
-    ///    只要和脚下差得不多就直接采用，顺便把轻微悬空纠回来；
-    /// ③ 差太多（挂在墙上的物件、不同楼层）就沿用脚下高度，绝不硬抬。
+    /// ① vnavmesh 查到的地板高度（最准）；
+    /// ② 同一房间内：**只用脚下高度**，绝不用物件自身的 Y。
+    ///    航行管制面板的 Y 在柜台上（比地面高一米多），早期这里采信了它，
+    ///    结果人被摆到柜台上、面板反而打不开。现在的原则是「只降不升」。
+    /// ③ 跨房间/跨区域才采信目标自身的 Y（门口、传送点都在地面）。
     /// </summary>
     private Vector3 ResolveDestination(Vector3 target, float flatDist)
     {
@@ -419,15 +465,14 @@ public sealed unsafe class Navigator
 
         var floor = this.QueryFloorY(target);
         if (floor.HasValue)
-            return new Vector3(target.X, floor.Value, target.Z);
+        {
+            // 地板比脚下高很多（柜台面/二楼）就不采信，免得被抬起来。
+            if (floor.Value <= currentY + RaiseTolerance)
+                return new Vector3(target.X, floor.Value, target.Z);
+        }
 
         if (flatDist <= SameRoomDistance)
-        {
-            var delta = target.Y - currentY;
-            return MathF.Abs(delta) <= FloorSnapRange
-                ? new Vector3(target.X, target.Y, target.Z)
-                : new Vector3(target.X, currentY, target.Z);
-        }
+            return new Vector3(target.X, currentY, target.Z);
 
         return target;
     }
@@ -497,6 +542,9 @@ public sealed unsafe class Navigator
 
     /// <summary>同一房间内，允许用目标物件的高度纠正脚下滑落的范围。</summary>
     public const float FloorSnapRange = 2.5f;
+
+    /// <summary>地板比脚下高过这个值就不采信（柜台面、二楼地板）。</summary>
+    public const float RaiseTolerance = 0.35f;
 
     /// <summary>单次瞬移允许的最大水平距离（同一区域内）。部队房区两个门之间可能隔上百米。</summary>
     public const float MaxTeleportStep = 200f;

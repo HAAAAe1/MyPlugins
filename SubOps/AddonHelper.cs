@@ -98,6 +98,12 @@ public static unsafe class AddonHelper
             return result;
 
         var count = Math.Clamp((int)addon->PopupMenu.EntryCount, 0, 32);
+
+        // 有的菜单（潜水艇的单艘艇菜单）EntryCount 会是 0，这时候自己往下数到空值为止。
+        var guess = count == 0;
+        if (guess)
+            count = 32;
+
         var values = addon->AtkUnitBase.AtkValues;
 
         for (var i = 0; i < count; i++)
@@ -105,7 +111,12 @@ public static unsafe class AddonHelper
             var value = values[i + 7];
             var kind = value.Type & AtkValueType.TypeMask;
             if (kind == AtkValueType.Null)
+            {
+                if (guess)
+                    break;
+
                 continue;
+            }
 
             string text;
             try
