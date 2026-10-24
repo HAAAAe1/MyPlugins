@@ -61,6 +61,8 @@ public sealed unsafe class Collector
     private int panelTries;
     private int panelMenuFires;
     private int pickFires;
+    private int roomFires;
+    private DateTime roomFirstFireAt = DateTime.MinValue;
 
     /// <summary>「什么都没开」连续等了几拍（给刚关掉的窗口一点时间）。</summary>
     private int idleTicks;
@@ -75,6 +77,12 @@ public sealed unsafe class Collector
 
     /// <summary>本轮有没有真的看到过潜艇列表。没看到过就不能断言「没有待收的」。</summary>
     private bool listSeen;
+
+    /// <summary>潜艇数据还没加载时等了几拍（别一读不到就收工）。</summary>
+    private int dataWaits;
+
+    /// <summary>这个时间之前不许瞬移：刚进屋/刚进工房时区域还在读，瞬移会被判「正在加载区域」。</summary>
+    private DateTime moveGateUntil = DateTime.MinValue;
 
     public Collector(Config config, Move move, ICondition condition, IChatGui chat, IPluginLog log)
     {
@@ -113,6 +121,8 @@ public sealed unsafe class Collector
         this.panelTries = 0;
         this.panelMenuFires = 0;
         this.pickFires = 0;
+        this.roomFires = 0;
+        this.roomFirstFireAt = DateTime.MinValue;
         this.idleTicks = 0;
         this.doorTries = 0;
         this.approachTries = 0;
@@ -123,6 +133,8 @@ public sealed unsafe class Collector
         this.teleportTries = 0;
         this.departures = 0;
         this.listSeen = false;
+        this.dataWaits = 0;
+        this.moveGateUntil = DateTime.MinValue;
         this.nextActionAt = DateTime.MinValue;
         this.Outcome = RunOutcome.Running;
         this.FailReason = string.Empty;
@@ -131,12 +143,16 @@ public sealed unsafe class Collector
         if (!this.move.HasVnavmesh)
             this.Say("提示：没检测到 vnavmesh，瞬移时只能沿用当前高度，遇到台阶请手动走一下。");
 
+        // 背包还没加载时两个数都是 0，别拿它当「没材料」吓人。
         var (ceruleum, material) = Workshop.Materials();
-        if (this.config.ReDispatch && ceruleum < 15)
-            this.Say($"桶装青磷水只剩 {ceruleum} 个（一艇一趟要 15 个），不足的艇会出不了港。");
+        if (ceruleum > 0 || material > 0)
+        {
+            if (this.config.ReDispatch && ceruleum < 15)
+                this.Say($"桶装青磷水只剩 {ceruleum} 个（一艇一趟要 15 个），不足的艇会出不了港。");
 
-        if (this.config.AutoRepair && material < 20)
-            this.Say($"魔导机械修理材料只剩 {material} 个，零件坏了可能修不上。");
+            if (this.config.AutoRepair && material < 20)
+                this.Say($"魔导机械修理材料只剩 {material} 个，零件坏了可能修不上。");
+        }
 
         this.queue.Reset(900);
         this.queue.Add("等待场景就绪", this.StepWaitFree, 180);
@@ -154,6 +170,10 @@ public sealed unsafe class Collector
     {
         if (this.Running)
             this.Say("已手动停止");
+
+        // 不管是手动停还是切角色前停，都顺手把潜艇列表关掉：
+        // 之前切角色时窗户还挂在屏幕上，切完留在那儿，看着就像「收完不取消」。
+        this.CloseList();
 
         this.queue.Reset();
         this.Outcome = RunOutcome.Idle;
@@ -372,8 +392,38 @@ public sealed unsafe class Collector
 
         this.move.Interact(door);
         this.SetStatus("进入房屋…");
-        this.Wait(1.2);
+
+        // 进屋之后客户端还要读室内场景。这时候马上瞬移，系统会判「正在加载区域」
+        // （人卡在原地、提示刷屏）。给一段静默期：至少 2 秒，且读图标志消失后再多等 0.5 秒。
+        this.moveGateUntil = DateTime.UtcNow.AddSeconds(2.0);
+        this.Wait(1.6);
         return false;
+    }
+
+    /// <summary>
+    /// 区域是否加载完、可以瞬移了。
+    ///
+    /// 只要还在 BetweenAreas，就把静默期往后推；读图结束后再多等 0.5 秒，
+    /// 避免「刚进图那一帧」瞬移被判成「正在加载区域」。
+    /// </summary>
+    private bool GateZoneLoaded()
+    {
+        if (this.condition[ConditionFlag.BetweenAreas])
+        {
+            this.moveGateUntil = DateTime.UtcNow.AddSeconds(0.5);
+            this.SetStatus("等区域加载…");
+            this.Wait(0.3);
+            return false;
+        }
+
+        if (DateTime.UtcNow < this.moveGateUntil)
+        {
+            this.SetStatus("等区域加载…");
+            this.Wait(0.25);
+            return false;
+        }
+
+        return true;
     }
 
     private bool StepRoomSelect()
@@ -381,6 +431,22 @@ public sealed unsafe class Collector
         // 房间菜单已经弹出：按文字挑「工房」
         if (Addons.Shown(Addons.SelectString))
         {
+            // 已经点过了就等窗口自己关，别再点第二次（会重复进房间／把菜单顶回来）；
+            // 但等了 6 秒还挂着，说明这一下没点上，允许再点。
+            if (this.roomFires >= 3)
+            {
+                if ((DateTime.UtcNow - this.roomFirstFireAt).TotalSeconds > 6)
+                {
+                    this.roomFires = 0;
+                }
+                else
+                {
+                    this.SetStatus("进入工房…");
+                    this.Wait(0.5);
+                    return false;
+                }
+            }
+
             var entries = Addons.MenuEntries();
             if (entries.Count == 0)
             {
@@ -392,11 +458,21 @@ public sealed unsafe class Collector
             if (index < 0)
                 index = Math.Clamp(this.config.RoomMenuIndex, 0, entries.Count - 1);
 
+            if (this.roomFires == 0)
+                this.roomFirstFireAt = DateTime.UtcNow;
+
+            this.roomFires++;
             Addons.Fire(Addons.SelectString, index);
             this.SetStatus($"进入工房（第 {index + 1} 项）");
+
+            // 进工房又是一次读图，同样先别瞬移。
+            this.moveGateUntil = DateTime.UtcNow.AddSeconds(2.0);
             this.Wait(1.6);
             return false;
         }
+
+        if (!this.GateZoneLoaded())
+            return false;
 
         if (!this.move.TryFindEvent(RoomSelectEventId, out var position, out var address))
         {
@@ -426,6 +502,9 @@ public sealed unsafe class Collector
     {
         if (Addons.Shown(Addons.SelectString))
             return true;
+
+        if (!this.GateZoneLoaded())
+            return false;
 
         if (!this.move.TryFindEvent(PanelEventId, out var position, out var address))
         {
@@ -472,9 +551,35 @@ public sealed unsafe class Collector
         // 什么都没开：还有待收的就重新开面板，没有就收工
         //
         // 注意：刚进屋那一两帧潜艇数据可能还没加载（4 个槽位都是 Rank 0），
-        // 这时候不能当成「没有待收的」。必须真的见过列表，才允许收工。
-        if (this.listSeen && this.NextPending() < 0)
-            return true;
+        // 这时候不能当成「没有待收的」。必须真的见过列表，且数据确实读到了，才允许收工。
+        if (this.listSeen)
+        {
+            var pending = this.NextPending(out var diagnostic);
+
+            if (pending != PendingUnknown)
+                this.dataWaits = 0;
+
+            if (pending == PendingDone)
+            {
+                this.SetStatus("没有待收取的潜艇");
+                this.Say($"本轮处理 {this.handled.Count} 艘，再次出航 {this.departures} 艘");
+                return true;
+            }
+
+            if (pending == PendingUnknown)
+            {
+                // 读不到 ≠ 没有。等几拍再说，别一读不到就整轮收工。
+                if (this.dataWaits++ < 24)
+                {
+                    this.SetStatus($"读潜艇数据…（{diagnostic}）");
+                    this.Wait(0.25);
+                    return false;
+                }
+
+                this.dataWaits = 0;
+                this.log.Warning($"[SubFleet] 6 秒读不到潜艇数据（{diagnostic}），重新开面板再读");
+            }
+        }
 
         // 刚点完「出发」那一两秒，列表可能还在回来的路上。先等两秒再重新开面板，
         // 否则会抢在列表出现前把面板又点一遍，把刚回来的列表关掉。
@@ -530,27 +635,67 @@ public sealed unsafe class Collector
         {
             this.listSeen = true;
 
-            var pending = this.NextPending();
-            if (pending < 0)
+            var pending = this.NextPending(out var diagnostic);
+            var entry = -1;
+            var name = string.Empty;
+
+            if (pending != PendingUnknown)
+                this.dataWaits = 0;
+
+            if (pending == PendingUnknown)
+            {
+                // 潜艇数据还没填进来：等。等不到就退回「看菜单文字」——
+                // 还没回来的艇，菜单那行一定带「正在探索 / 剩余时间」。
+                if (this.dataWaits++ < 24)
+                {
+                    this.SetStatus($"读潜艇数据…（{diagnostic}）");
+                    this.Wait(0.25);
+                    return false;
+                }
+
+                this.dataWaits = 0;
+                this.log.Warning($"[SubFleet] 6 秒读不到潜艇数据（{diagnostic}），改用菜单文字判断");
+                this.Say($"读不到潜艇数据（{diagnostic}），改看菜单文字");
+
+                entry = this.PickByMenuText(entries);
+                if (entry < 0)
+                {
+                    this.SetStatus("没有待收取的潜艇");
+                    this.Say("菜单里没有可收的（全部还在探索），收工");
+                    this.CloseList();
+                    return true;
+                }
+
+                // 槽位先按「第几项」算，到出航页再用游戏内下标纠正
+                pending = entry;
+                name = EntryName(entries[entry]);
+            }
+            else if (pending == PendingDone)
             {
                 this.SetStatus("没有待收取的潜艇");
                 this.Say($"本轮处理 {this.handled.Count} 艘，再次出航 {this.departures} 艘");
+
+                // 收完必须点「取消」把列表关掉。
+                // 只调 Close(true) 的话，游戏那边还认为菜单开着，下一帧又摆回来——
+                // 这就是「潜艇收完了，列表还挂在屏幕上不消失」。
+                this.CloseList();
                 return true;
             }
-
-            var name = this.SlotName(pending);
-            var entry = -1;
-            for (var i = 0; i < entries.Count; i++)
+            else
             {
-                if (!string.IsNullOrWhiteSpace(name) && entries[i].Contains(name, StringComparison.OrdinalIgnoreCase))
+                name = this.SlotName(pending);
+                for (var i = 0; i < entries.Count; i++)
                 {
-                    entry = i;
-                    break;
+                    if (!string.IsNullOrWhiteSpace(name) && entries[i].Contains(name, StringComparison.OrdinalIgnoreCase))
+                    {
+                        entry = i;
+                        break;
+                    }
                 }
-            }
 
-            if (entry < 0)
-                entry = Math.Clamp(pending, 0, entries.Count - 1);
+                if (entry < 0)
+                    entry = Math.Clamp(pending, 0, entries.Count - 1);
+            }
 
             this.selectedIndex = pending;
             this.selectedName = name;
@@ -607,9 +752,13 @@ public sealed unsafe class Collector
         }
 
         var title = Addons.MenuTitle();
-        return !string.IsNullOrEmpty(title)
-               && title.Contains("潜水艇", StringComparison.Ordinal)
-               && (title.Contains("列表", StringComparison.Ordinal) || title.Contains("名称", StringComparison.Ordinal));
+        if (string.IsNullOrEmpty(title))
+            return false;
+
+        // 潜艇列表的标题是「请选择潜水艇。」（后面跟着机体数/燃料数那几行）
+        return title.Contains("潜水艇", StringComparison.Ordinal)
+               || title.Contains("潛水艇", StringComparison.Ordinal)
+               || title.Contains("Submarine", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>出航确认页：先修再出发。返回 true 只在「没有潜艇可处理了」时才用不到，这里固定 false。</summary>
@@ -763,15 +912,24 @@ public sealed unsafe class Collector
 
         if (Addons.Shown(Addons.SelectString))
         {
-            if (this.exitTries++ > 10)
+            if (this.exitTries >= 10)
             {
-                // 关不掉也别把整轮判失败——留个记录，让上层继续切下一个角色。
-                this.log.Warning("[SubFleet] 10 次都没关掉潜艇列表菜单，先放着");
+                // 连「取消」都点不掉：最后手段直接隐藏。整轮其实已经收完了，
+                // 不能因为这个判失败、把角色打进 30 分钟冷却。
+                this.log.Warning("[SubFleet] 点了 10 次取消都没关掉潜艇列表，改为直接隐藏");
+                Addons.Hide(Addons.SelectString);
+                this.Wait(0.5);
+                this.expectList = false;
                 return true;
             }
 
-            Addons.Close(Addons.SelectString);
-            this.Wait(0.6);
+            if (this.exitTries == 0 || this.exitTries == 5)
+                this.log.Information($"[SubFleet] 关闭列表（第 {this.exitTries + 1} 次）：{string.Join(" | ", Addons.MenuEntries())}");
+
+            this.exitTries++;
+            this.SetStatus("关闭潜艇列表…");
+            this.CloseList();
+            this.Wait(0.7);
             return false;
         }
 
@@ -790,11 +948,14 @@ public sealed unsafe class Collector
         return this.selectedIndex;
     }
 
-    private int NextPending()
+    /// <summary>该收哪一艘。-1 ＝ 都收完了，-2 ＝ 潜艇数据读不到（还没加载）。</summary>
+    private const int PendingDone = -1;
+    private const int PendingUnknown = -2;
+
+    private int NextPending(out string diagnostic)
     {
-        var subs = Workshop.Read();
-        if (subs.Count == 0)
-            return -1;
+        if (!Workshop.TryRead(out var subs, out diagnostic))
+            return PendingUnknown;
 
         var now = Workshop.Now;
         foreach (var sub in subs)
@@ -811,7 +972,56 @@ public sealed unsafe class Collector
             return sub.Slot;
         }
 
+        return PendingDone;
+    }
+
+    /// <summary>
+    /// 数据读不到时的兜底：按菜单文字挑一行。
+    /// 还在外面的艇，菜单里一定带「正在探索」和剩余时间；已返航的不会带。
+    /// </summary>
+    private int PickByMenuText(IReadOnlyList<string> entries)
+    {
+        for (var i = 0; i < entries.Count; i++)
+        {
+            var text = entries[i];
+            if (string.IsNullOrWhiteSpace(text))
+                continue;
+
+            if (text.Contains("取消", StringComparison.Ordinal)
+                || text.Contains("キャンセル", StringComparison.Ordinal)
+                || text.Contains("返回", StringComparison.Ordinal)
+                || text.Contains("Cancel", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (text.Contains("正在探索", StringComparison.Ordinal)
+                || text.Contains("探索中", StringComparison.Ordinal)
+                || text.Contains("剩余时间", StringComparison.Ordinal)
+                || text.Contains("剩餘時間", StringComparison.Ordinal))
+                continue;
+
+            return i;
+        }
+
         return -1;
+    }
+
+    /// <summary>「泡芙一号 [99级] [正在探索: …]」→「泡芙一号」。</summary>
+    private static string EntryName(string entry)
+    {
+        var cut = entry.IndexOf(" [", StringComparison.Ordinal);
+        return cut > 0 ? entry[..cut].Trim() : entry.Trim();
+    }
+
+    /// <summary>点「取消」把潜艇列表关掉（不能只 Close，游戏会把窗口摆回来）。</summary>
+    private void CloseList()
+    {
+        if (!Addons.Shown(Addons.SelectString))
+            return;
+
+        if (Addons.CancelMenu())
+            this.Say("关闭潜艇列表（取消）");
+        else
+            Addons.Close(Addons.SelectString);
     }
 
     private string SlotName(int index)

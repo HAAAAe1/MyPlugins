@@ -74,6 +74,27 @@ public static unsafe class Addons
         addon->Close(true);
     }
 
+    /// <summary>
+    /// 关掉 SelectString 菜单——**必须点「取消」，不能只 Close**。
+    ///
+    /// 潜水艇列表这类菜单是游戏事件弹出的：只调 <c>Close(true)</c> 把窗口藏起来，
+    /// 游戏那边还认为「菜单开着」，下一帧又把窗口摆回来——表现就是
+    /// 「潜艇收完了，列表还挂在屏幕上，怎么都不消失」。
+    ///
+    /// 正确做法和按 ESC 一样：触发「取消」那一项的回调（找不到「取消」就发 -1），
+    /// 让游戏自己走「事件结束」的流程。
+    /// </summary>
+    public static bool CancelMenu()
+    {
+        var entries = MenuEntries();
+        var cancel = FindEntry(entries, "取消", "キャンセル", "Cancel");
+
+        if (cancel >= 0 && Fire(SelectString, cancel))
+            return true;
+
+        return Fire(SelectString, -1);
+    }
+
     public static void Hide(string name)
     {
         var addon = gui?.GetAddonByName<AtkUnitBase>(name);

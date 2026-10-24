@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Client.Game.UI;
@@ -67,17 +68,33 @@ public static unsafe class Workshop
     }
 
     /// <summary>读 4 个槽位。不在工房或者数据还没加载时返回空列表。</summary>
-    public static List<Vessel> Read()
+    public static List<Vessel> Read() => TryRead(out var vessels, out _) ? vessels : new List<Vessel>();
+
+    /// <summary>
+    /// 读 4 个槽位，并且**告诉调用方到底读到了没有**。
+    ///
+    /// 「读不到」和「一艘都没派出去」必须分开：以前两者都是空列表，
+    /// 刚进场那一两秒 WorkshopTerritory 还没填数据，于是被判成
+    /// 「没有待收取的潜艇」，整轮直接收工——也就是「刚开始时读取不到潜艇」。
+    /// </summary>
+    public static bool TryRead(out List<Vessel> vessels, out string diagnostic)
     {
-        var result = new List<Vessel>();
+        vessels = new List<Vessel>();
+        diagnostic = string.Empty;
 
         var manager = HousingManager.Instance();
         if (manager == null)
-            return result;
+        {
+            diagnostic = "HousingManager 未就绪";
+            return false;
+        }
 
         var territory = manager->WorkshopTerritory;
         if (territory == null)
-            return result;
+        {
+            diagnostic = "不在工房（WorkshopTerritory 为空）";
+            return false;
+        }
 
         try
         {
@@ -95,16 +112,29 @@ public static unsafe class Workshop
                     name = $"#{i + 1}";
                 }
 
-                result.Add(new Vessel(i, sub.RankId, name, sub.GetReturnTime()));
+                vessels.Add(new Vessel(i, sub.RankId, name, sub.GetReturnTime()));
             }
         }
-        catch
+        catch (Exception ex)
         {
             // 刚进屋那一两帧指针还没切过来，当成没读到
-            result.Clear();
+            vessels.Clear();
+            diagnostic = "读潜艇数据异常：" + ex.Message;
+            return false;
         }
 
-        return result;
+        var alive = vessels.Count(x => x.Enabled);
+        if (alive == 0)
+        {
+            // 4 个槽位等级全是 0：工房数据还没填进来（有潜艇的话等级至少 1）。
+            // 这种情况绝不等于「没有待收的潜艇」，交给调用方继续等。
+            diagnostic = "4 个槽位等级都是 0（数据未加载）";
+            vessels.Clear();
+            return false;
+        }
+
+        diagnostic = $"读到 {alive} 艘";
+        return true;
     }
 
     /// <summary>
