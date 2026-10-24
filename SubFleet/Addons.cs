@@ -101,15 +101,41 @@ public static unsafe class Addons
     ///
     /// **必须等节点加载完再发**：节点没加载完时发出去的回调会被游戏丢掉，
     /// 而调用方看到的只是「窗口没动」。返回 false 就表示这次没发出去，要重试。
+    ///
+    /// 安全阀：万一某个窗口的 <c>LoadedState</c> 一直不变成 3（个别窗口会这样），
+    /// 等 2 秒后按「可见 + IsReady」照发，免得整个流程永远卡在等节点上。
     /// </summary>
     public static bool Fire(string name, int index)
     {
-        if (!NodesReady(name))
-            return false;
-
         var addon = Raw(name);
-        return addon != null && addon->FireCallbackInt(index);
+        if (addon == null || !addon->IsVisible)
+        {
+            blockedSince.Remove(name);
+            return false;
+        }
+
+        if (!NodesReady(name))
+        {
+            if (!blockedSince.TryGetValue(name, out var since))
+            {
+                blockedSince[name] = DateTime.UtcNow;
+                return false;
+            }
+
+            if ((DateTime.UtcNow - since).TotalSeconds < 2.0 || !addon->IsReady)
+                return false;
+
+            blockedSince.Remove(name);
+            log?.Warning($"[SubFleet] {name} 的节点状态 2 秒都不是 Loaded，按「可见 + IsReady」照发回调");
+            return addon->FireCallbackInt(index);
+        }
+
+        blockedSince.Remove(name);
+        return addon->FireCallbackInt(index);
     }
+
+    /// <summary>每个窗口「开始等节点」的时刻，只用于上面那个安全阀。</summary>
+    private static readonly Dictionary<string, DateTime> blockedSince = new();
 
     public static void Close(string name)
     {
