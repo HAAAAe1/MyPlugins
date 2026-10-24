@@ -61,6 +61,9 @@ public sealed unsafe class Collector
     private int panelTries;
     private int panelMenuFires;
     private int pickFires;
+
+    /// <summary>「什么都没开」连续等了几拍（给刚关掉的窗口一点时间）。</summary>
+    private int idleTicks;
     private int doorTries;
     private int approachTries;
     private int repairTicks;
@@ -110,6 +113,7 @@ public sealed unsafe class Collector
         this.panelTries = 0;
         this.panelMenuFires = 0;
         this.pickFires = 0;
+        this.idleTicks = 0;
         this.doorTries = 0;
         this.approachTries = 0;
         this.repairTicks = 0;
@@ -472,6 +476,15 @@ public sealed unsafe class Collector
         if (this.listSeen && this.NextPending() < 0)
             return true;
 
+        // 刚点完「出发」那一两秒，列表可能还在回来的路上。先等两秒再重新开面板，
+        // 否则会抢在列表出现前把面板又点一遍，把刚回来的列表关掉。
+        if (this.idleTicks++ < 4)
+        {
+            this.SetStatus("等界面…");
+            this.Wait(0.5);
+            return false;
+        }
+
         if (this.reopenTries++ > 12)
         {
             this.Fail("面板反复关闭，收不下去");
@@ -504,6 +517,7 @@ public sealed unsafe class Collector
 
     private bool HandleMenu()
     {
+        this.idleTicks = 0;
         var entries = Addons.MenuEntries();
         if (entries.Count == 0)
         {

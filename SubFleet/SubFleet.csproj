@@ -1,7 +1,7 @@
 <Project Sdk="Dalamud.NET.Sdk/15.0.0">
 
   <PropertyGroup>
-    <Version>1.0.1</Version>
+    <Version>1.0.2</Version>
     <Author>HAAAAe1</Author>
     <Name>SubFleet</Name>
     <Punchline>部队工房潜水艇：收取、修理、再出航，多角色自动轮换</Punchline>
