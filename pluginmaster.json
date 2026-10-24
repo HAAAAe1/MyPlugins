@@ -2,7 +2,7 @@
   {
     "Name": "SubFleet",
     "InternalName": "SubFleet",
-    "AssemblyVersion": "1.0.0.0",
+    "AssemblyVersion": "1.0.1.0",
     "Author": "HAAAAe1",
     "Punchline": "部队工房潜艇：收取、修理、再出航，多角色自动轮换",
     "Description": "照 DailyRoutines 的顺序重写的潜艇作业插件：进屋 → 航行管制面板 → 逐个确认远航报告 → 读零件耐久、把耐久为 0 的零件修好 → 按原航线再次出航。全部处理完自动切下一个角色（需要 Lifestream）。场景移动用瞬移，不需要 vnavmesh 寻路。",
@@ -24,11 +24,11 @@
     "DalamudApiLevel": 15,
     "AcceptsFeedback": true,
     "IsHide": false,
-    "LastUpdate": 1792858372,
+    "LastUpdate": 1792858437,
     "DownloadCount": 0,
     "RepoUrl": "https://github.com/HAAAAe1/MyPlugins",
-    "DownloadLinkInstall": "https://raw.githubusercontent.com/HAAAAe1/MyPlugins/main/dist/SubFleet-1.0.0.zip",
-    "DownloadLinkUpdate": "https://raw.githubusercontent.com/HAAAAe1/MyPlugins/main/dist/SubFleet-1.0.0.zip"
+    "DownloadLinkInstall": "https://raw.githubusercontent.com/HAAAAe1/MyPlugins/main/dist/SubFleet-1.0.1.zip",
+    "DownloadLinkUpdate": "https://raw.githubusercontent.com/HAAAAe1/MyPlugins/main/dist/SubFleet-1.0.1.zip"
   },
   {
     "Name": "SubOps",

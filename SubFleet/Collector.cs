@@ -430,12 +430,15 @@ public sealed unsafe class Collector
             return false;
         }
 
-        if (!this.move.Approach(position, 2.2f))
+        if (!this.move.Approach(position, 2.2f, Math.Min(this.approachTries / 3, 3)))
         {
+            this.approachTries++;
             this.SetStatus("靠近航行管制面板…");
             this.Wait(0.25);
             return false;
         }
+
+        this.approachTries = 0;
 
         if (this.panelTries++ > 12)
         {
@@ -482,12 +485,15 @@ public sealed unsafe class Collector
             return false;
         }
 
-        if (!this.move.Approach(position, 2.2f))
+        if (!this.move.Approach(position, 2.2f, Math.Min(this.approachTries / 3, 3)))
         {
+            this.approachTries++;
             this.SetStatus("靠近航行管制面板…");
             this.Wait(0.25);
             return false;
         }
+
+        this.approachTries = 0;
 
         this.move.InteractRaw(address);
         this.expectList = false;   // 面板重新打开后又是主菜单，别把主菜单当成潜艇列表
@@ -609,6 +615,10 @@ public sealed unsafe class Collector
             this.Fail("拿不到当前潜艇下标（特征码没扫到，菜单里也没选中）");
             return false;
         }
+
+        var gameIndex = Workshop.CurrentIndex;
+        if (gameIndex >= 0 && this.selectedIndex >= 0 && gameIndex != this.selectedIndex)
+            this.log.Warning($"[SubFleet] 下标不一致：菜单选的是 {this.selectedIndex}，游戏内是 {gameIndex}，按游戏内的来");
 
         if (this.config.AutoRepair)
         {
