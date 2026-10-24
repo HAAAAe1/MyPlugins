@@ -529,15 +529,16 @@ public sealed class Plugin : IDalamudPlugin
 
         for (var slot = 0; slot < 4; slot++)
         {
-            if (!Workshop.TryReadParts(slot, out var parts))
+            if (!Workshop.TryReadParts(slot, out var parts, out var diagnostic))
             {
-                this.chat.Print($"  {slot + 1} 号：读不到零件（容器未加载，或该槽位为空）");
+                this.chat.Print($"  {slot + 1} 号：{diagnostic}");
+                this.log.Information($"[SubOps/parts] {slot + 1} 号：{diagnostic}");
                 continue;
             }
 
             var text = string.Join("  ", parts.Select(p => $"{p.Slot}号 耐久{p.Condition}{(p.Damaged ? "（坏）" : string.Empty)}"));
             this.chat.Print($"  {slot + 1} 号：{text}");
-            this.log.Information($"[SubOps/parts] {slot + 1} 号：{text}");
+            this.log.Information($"[SubOps/parts] {slot + 1} 号：{text}（{diagnostic}）");
         }
     }
 

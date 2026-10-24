@@ -76,6 +76,12 @@ public sealed class SubmarineRunner
     /// <summary>当前槽位已经尝试修理的次数，避免修理失败时反复下发命令。</summary>
     private int repairAttempts;
 
+    /// <summary>
+    /// 修理最多复读多少拍（每拍 0.25 秒 → 约 30 秒）。
+    /// 超了就不再纠缠：让上层按「还有坏件」处理，关窗跳到下一艘。
+    /// </summary>
+    private const int MaxRepairTicks = 120;
+
     /// <summary>面板已经点了多少次「交互」但菜单没出来。</summary>
     private int panelFires;
 
@@ -753,13 +759,22 @@ public sealed class SubmarineRunner
             if (this.config.AutoRepair && this.TryRepairParts())
                 return;
 
-            // 修完还要再确认一次：只要还有坏零件就**绝对不能**点「出发」，
-            // 游戏会弹「无法进行出港，需要修理配件」，而我们却把这艘记成已处理——
+            // 修完还要再确认一次：只要还有坏零件（或者干脆读不到零件）就**绝对不能**点「出发」，
+            // 否则游戏弹「无法进行出港，需要修理配件」，而我们却把这艘记成已处理——
             // 这就是「不会修理、直接跳过」的由来。
             if (this.config.AutoRepair && this.currentSlot is >= 0 and < 4)
             {
-                if (Workshop.TryReadParts(this.currentSlot, out var parts)
-                    && parts.Any(x => x.Damaged))
+                if (!Workshop.TryReadParts(this.currentSlot, out var parts, out var diagnostic))
+                {
+                    // 读不到 ≠ 不用修。读不到时点出发等于赌运气，直接判这艘不可出航。
+                    this.Say($"读不到零件数据（{diagnostic}），这艘不点出发。");
+                    AddonHelper.Close(this.gui, AddonHelper.ExplorationDetail);
+                    this.MarkSlotDone(this.currentSlot, "零件数据读取失败，已跳过");
+                    this.Delay(1.2);
+                    return;
+                }
+
+                if (parts.Any(x => x.Damaged))
                 {
                     var left = parts.Count(x => x.Damaged);
                     this.Say($"{this.currentSlot + 1} 号艇还有 {left} 个零件损坏、修不上，这艘先跳过。");
@@ -867,67 +882,76 @@ public sealed class SubmarineRunner
     }
 
     /// <summary>
-    /// 修理损坏零件。底层走游戏的 RepairSubmarinePart(1153)，参数是
-    /// (潜艇槽位, 零件下标)，和 DailyRoutines 一致：不用点界面、不用选部位。
+    /// 修理当前这艘艇损坏的零件。底层走游戏的 RepairSubmarinePart(1153)，
+    /// 参数是 (潜艇槽位, 零件下标)，和 DailyRoutines 一致：不用点界面、不用选部位。
     ///
-    /// 这里把 **4 个槽位的坏零件全修**，而不是只修「当前这艘」：
-    /// 我们手上的 currentSlot 是「菜单里的第几行」，游戏内部的当前潜艇索引未必对得上；
-    /// 一旦错位，命令就落到另一艘艇上，眼前这艘还是坏的，点出发必然被拒。
-    /// 反正这四艘接下来都要派出去，顺手全修掉最省事，代价只是多花几个修理材料。
+    /// 节奏也照 DR：**下发 → 下一拍重新读 → 还坏就再下发**，直到 Condition 变回 > 0。
+    /// 游戏不会立刻把耐久改回来，以前「发一次、等 1.2 秒、就点出发」必然被拒，
+    /// 屏幕上就是那句「无法进行出港，需要修理配件」。
+    ///
+    /// 只修当前这艘（和 DR 一样省材料）。如果连发 6 拍这艘还是坏的，
+    /// 说明「菜单第几行」和「游戏内部潜艇索引」错位了，这时才退化成 4 个槽位全修。
     /// </summary>
     private bool TryRepairParts()
     {
-        if (this.repairAttempts >= 12)
+        if (this.currentSlot is < 0 or > 3)
             return false;
 
-        var order = this.currentSlot is >= 0 and < 4
-            ? new[] { this.currentSlot, (this.currentSlot + 1) % 4, (this.currentSlot + 2) % 4, (this.currentSlot + 3) % 4 }
-            : new[] { 0, 1, 2, 3 };
+        if (this.repairAttempts >= MaxRepairTicks)
+            return false;
 
-        var pending = new List<(int Slot, int Part)>();
-        var anyData = false;
-
-        foreach (var slot in order)
+        if (!Workshop.TryReadParts(this.currentSlot, out var parts, out var diagnostic))
         {
-            if (!Workshop.TryReadParts(slot, out var parts))
-                continue;
-
-            anyData = true;
-            foreach (var part in parts.Where(x => x.Damaged))
-                pending.Add((slot, part.Slot));
+            // 读不到 = 还不知道坏没坏。空转等容器加载，绝不能返回 false 让上层去点出发。
+            this.repairAttempts++;
+            this.StatusText = $"等待零件数据…（{diagnostic}）";
+            this.Delay(0.25);
+            return true;
         }
 
-        // 零件容器还没加载（刚开窗口那一两帧）：等两拍，别当成「不用修」。
-        if (!anyData)
+        var damaged = parts.Where(x => x.Damaged).ToList();
+        if (damaged.Count == 0)
         {
-            if (this.repairAttempts < 3)
-            {
-                this.repairAttempts++;
-                this.StatusText = "读取潜水艇零件…";
-                this.Delay(0.4);
-                return true;
-            }
+            if (this.repairAttempts > 0)
+                this.Say($"{this.currentSlot + 1} 号艇零件已修好，准备出发。");
 
-            this.repairAttempts = 12;
-            this.Say("读不到潜水艇零件数据，这一艘不修理了。");
+            this.repairAttempts = 0;
             return false;
         }
-
-        if (pending.Count == 0)
-            return false;
 
         var (_, material) = Workshop.ReadMaterials();
-        if (material <= 0)
+
+        var pending = new List<(int Slot, int Part)>();
+        if (this.repairAttempts < 6)
         {
-            this.Say("「魔导机械修理材料」用完了，这一艘修不了。");
-            this.repairAttempts = 12;
-            return false;
+            // 正常路径：只修眼前这艘。
+            foreach (var part in damaged)
+                pending.Add((this.currentSlot, part.Slot));
+        }
+        else
+        {
+            // 兜底：菜单下标和内部槽位错位时，四艘一起修，保证眼前这艘一定被修到。
+            for (var slot = 0; slot < 4; slot++)
+            {
+                if (slot == this.currentSlot)
+                {
+                    foreach (var part in damaged)
+                        pending.Add((slot, part.Slot));
+                    continue;
+                }
+
+                if (!Workshop.TryReadParts(slot, out var others))
+                    continue;
+
+                foreach (var part in others.Where(x => x.Damaged))
+                    pending.Add((slot, part.Slot));
+            }
         }
 
         var sent = 0;
         foreach (var (slot, part) in pending)
         {
-            if (sent >= material)
+            if (material > 0 && sent >= material)
                 break;
 
             if (Workshop.RepairPart(slot, part))
@@ -935,9 +959,19 @@ public sealed class SubmarineRunner
         }
 
         this.repairAttempts++;
-        this.StatusText = $"修理潜水艇零件（{sent} 个）…";
-        this.Say($"修理：下发 {sent} 条命令（共 {pending.Count} 个零件损坏，材料 {material}，第 {this.repairAttempts} 次）");
-        this.Delay(1.2);
+        this.StatusText = $"修理零件（第 {this.repairAttempts} 次，下发 {sent} 条）…";
+
+        if (this.repairAttempts == 1 || this.repairAttempts % 4 == 0 || sent == 0)
+        {
+            this.Say(
+                $"修理 {this.currentSlot + 1} 号艇：{damaged.Count} 个零件耐久为 0，"
+                + $"下发 {sent} 条命令（修理材料 {material}，第 {this.repairAttempts} 次）");
+        }
+
+        if (material <= 0)
+            this.Say("「魔导机械修理材料」数量为 0，这艘修不了。");
+
+        this.Delay(0.25);
         return true;
     }
 

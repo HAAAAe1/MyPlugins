@@ -123,9 +123,15 @@ public static unsafe class Workshop
         return -1;
     }
 
-    /// <summary>燃料 / 修理材料的持有量，用于出航前的可行性提示。物品ID见下。</summary>
-    public const uint CeruleumTank = 10373;      // 桶装青磷水
-    public const uint RepairMaterial = 10155;    // 魔导机械修理材料
+    /// <summary>
+    /// 燃料 / 修理材料。物品 ID 与 DailyRoutines 的常量逐字对齐：
+    ///   10155 = 桶装青磷水（出航消耗）
+    ///   10373 = 魔导机械修理材料（修理消耗）
+    /// 这两个以前写反了：修理由此可能读到「0 桶青磷水」而误判成「没有修理材料」，
+    /// 直接跳过修理去点出发，游戏就弹「无法进行出港，需要修理配件」。
+    /// </summary>
+    public const uint CeruleumTank = 10155;      // 桶装青磷水
+    public const uint RepairMaterial = 10373;    // 魔导机械修理材料
 
     public static (int Ceruleum, int RepairMaterial) ReadMaterials()
     {
@@ -141,10 +147,13 @@ public static unsafe class Workshop
     // ───────────────────────── 零件与修理 ─────────────────────────
 
     /// <summary>
-    /// 潜水艇零件所在的背包容器 ID。工房里这个数值固定是 25004，
+    /// 潜水艇零件所在的背包容器。
+    /// DailyRoutines 用的是 InventoryType.HousingInteriorPlacedItems2 —— 工房里零件的容器就是它。
     /// 每艘艇占 5 格（用前 4 格：船体 / 舾装 / 船首 / 船尾），所以第 n 艘的起点是 5*n。
+    /// 以前这里硬编码 25004，一旦枚举值不是这个数就 GetInventoryContainer 拿到 null，
+    /// 读零件永远失败 → 被当成「不用修」→ 点出发 → 游戏拒绝出港。
     /// </summary>
-    public const int PartsContainerId = 25004;
+    public static InventoryType PartsContainer => InventoryType.HousingInteriorPlacedItems2;
 
     /// <summary>每艘艇在容器里占的格数。</summary>
     public const int PartsPerSubmarine = 5;
@@ -172,18 +181,39 @@ public static unsafe class Workshop
     /// 游戏弹「无法进行出港，需要修理配件」——看起来就是「不会维修潜艇」。
     /// </summary>
     public static bool TryReadParts(int submarineSlot, out List<Part> parts)
+        => TryReadParts(submarineSlot, out parts, out _);
+
+    /// <summary>同上，额外返回一句人话诊断，方便 /subops parts 定位容器到底卡在哪。</summary>
+    public static bool TryReadParts(int submarineSlot, out List<Part> parts, out string diagnostic)
     {
         parts = new List<Part>();
-        if (submarineSlot < 0 || submarineSlot > 3)
+        diagnostic = string.Empty;
+
+        if (submarineSlot is < 0 or > 3)
+        {
+            diagnostic = $"槽位非法 {submarineSlot}";
             return false;
+        }
 
         var manager = InventoryManager.Instance();
         if (manager == null)
+        {
+            diagnostic = "InventoryManager 还没就绪";
             return false;
+        }
 
-        var container = manager->GetInventoryContainer((InventoryType)PartsContainerId);
-        if (container == null || !container->IsLoaded)
+        var container = manager->GetInventoryContainer(PartsContainer);
+        if (container == null)
+        {
+            diagnostic = $"容器 {(int)PartsContainer} 取不到（工房界面没开？）";
             return false;
+        }
+
+        if (!container->IsLoaded)
+        {
+            diagnostic = $"容器 {(int)PartsContainer} 还没加载";
+            return false;
+        }
 
         var start = PartsPerSubmarine * submarineSlot;
         for (var i = 0; i < PartSlotCount; i++)
@@ -195,6 +225,7 @@ public static unsafe class Workshop
             parts.Add(new Part(i, item->ItemId, item->Condition));
         }
 
+        diagnostic = $"容器 {(int)PartsContainer} 已加载，槽位 {submarineSlot} 读到 {parts.Count} 个零件";
         return parts.Count > 0;
     }
 

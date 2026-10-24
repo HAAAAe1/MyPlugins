@@ -2,11 +2,11 @@
   {
     "Name": "SubOps",
     "InternalName": "SubOps",
-    "AssemblyVersion": "0.5.5.0",
+    "AssemblyVersion": "0.5.6.0",
     "Author": "HAAAAe1",
     "Punchline": "部队工房潜水艇作业：一键收取、自动修理、重新委派",
     "Description": "读取部队工房 4 艘潜水艇的返航时间与零件耐久，自动进屋、开航行管制面板、逐艘确认收取，出航前自动修理耐久为 0 的零件，最后按原航线再次委派。支持多角色轮换：从名册第一个角色开始逐个处理，收完自动切下一个。场景移动用瞬移（不需要 vnavmesh 寻路），切角色需要 Lifestream。",
-    "Changelog": "0.5.5：修「不会修理潜艇」和「收完一艘后一直传送、不收下一艘」。① 修理：以前只要零件容器还没加载，读到的空列表被当成「这艘不用修」，于是直接点出发——游戏弹「无法进行出港，需要修理配件」，而插件却把这艘记成已处理。现在读不到零件会等，读到了就把 4 个槽位的坏零件全部修掉（避免菜单下标和潜艇槽位错位导致修到别的艇上），修完再确认一次耐久，仍有坏件就绝不点出发。② 传送：面板交互以前是无条件「算一个 2.2 米外的落点再瞬移」，人贴着面板时算出来的点常落在墙里/房间外，于是每一拍都瞬移一次、围着面板转圈，看起来就是一直在传送。现在离面板 3.2 米以内只交互不移动，超出才瞬移一次；按事件找物件也从「取第一个」改成「取离自己最近的那个」。新增 /subops parts 可查看 4 个槽位零件耐久与修理材料。",
+    "Changelog": "0.5.6：修「点了出发却弹『无法进行出港，需要修理配件』」。修理一直是空转的，三处硬伤：① 零件容器写死成 25004，正确的是 InventoryType.HousingInteriorPlacedItems2，容器取错就永远读不到耐久，读不到又被当成「这艘不用修」；② 修理材料和青磷水的物品 ID 写反了（10373 是魔导机械修理材料、10155 是桶装青磷水），可能误判成「没有修理材料」直接跳过；③ 修理只下发一次命令、等 1.2 秒就点出发，而游戏把耐久改回来是有延迟的。现在照 DailyRoutines 的节奏：下发 RepairSubmarinePart → 下一拍重新读耐久 → 仍是 0 就继续下发，直到耐久恢复才允许点出发；零件读不到时同样绝不点出发。/subops parts 会打印容器 ID、是否加载、每个零件的耐久与坏件标记。",
     "ApplicableVersion": "any",
     "LoadPriority": 0,
     "Tags": [
@@ -23,10 +23,10 @@
     "DalamudApiLevel": 15,
     "AcceptsFeedback": true,
     "IsHide": false,
-    "LastUpdate": 1792856462,
+    "LastUpdate": 1792857010,
     "DownloadCount": 0,
     "RepoUrl": "https://github.com/HAAAAe1/MyPlugins",
-    "DownloadLinkInstall": "https://raw.githubusercontent.com/HAAAAe1/MyPlugins/main/dist/SubOps-0.5.5.zip",
-    "DownloadLinkUpdate": "https://raw.githubusercontent.com/HAAAAe1/MyPlugins/main/dist/SubOps-0.5.5.zip"
+    "DownloadLinkInstall": "https://raw.githubusercontent.com/HAAAAe1/MyPlugins/main/dist/SubOps-0.5.6.zip",
+    "DownloadLinkUpdate": "https://raw.githubusercontent.com/HAAAAe1/MyPlugins/main/dist/SubOps-0.5.6.zip"
   }
 ]
