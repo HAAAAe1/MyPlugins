@@ -62,7 +62,7 @@ public sealed class Plugin : IDalamudPlugin
         this.configuration = pluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
         this.configuration.Migrate();
         this.navigator = new Navigator(pluginInterface, objects, targets, clientState, log);
-        this.runner = new SubmarineRunner(this.configuration, this.navigator, gui, condition, chat);
+        this.runner = new SubmarineRunner(this.configuration, this.navigator, gui, condition, chat, log);
         this.characters = new CharacterBook(this.configuration, clientState, playerState, chat, log);
         this.switcher = new CharacterSwitcher(
             this.configuration,

@@ -59,6 +59,7 @@ public sealed class SubmarineRunner
     private readonly IGameGui gui;
     private readonly ICondition condition;
     private readonly IChatGui chat;
+    private readonly IPluginLog log;
 
     private DateTime nextActionAt = DateTime.MinValue;
 
@@ -154,13 +155,14 @@ public sealed class SubmarineRunner
     /// <summary>同一个确认框连续点了多少次（防死循环）。</summary>
     private int yesnoSameCount;
 
-    public SubmarineRunner(Configuration config, Navigator nav, IGameGui gui, ICondition condition, IChatGui chat)
+    public SubmarineRunner(Configuration config, Navigator nav, IGameGui gui, ICondition condition, IChatGui chat, IPluginLog log)
     {
         this.config = config;
         this.nav = nav;
         this.gui = gui;
         this.condition = condition;
         this.chat = chat;
+        this.log = log;
     }
 
     public RunnerStage Stage { get; private set; } = RunnerStage.Idle;
@@ -905,11 +907,22 @@ public sealed class SubmarineRunner
             // 读不到 = 还不知道坏没坏。空转等容器加载，绝不能返回 false 让上层去点出发。
             this.repairAttempts++;
             this.StatusText = $"等待零件数据…（{diagnostic}）";
+
+            if (this.repairAttempts == 1 || this.repairAttempts % 8 == 0)
+                this.log.Warning($"[SubOps/repair] 第 {this.repairAttempts} 拍读不到零件：{diagnostic}");
+
             this.Delay(0.25);
             return true;
         }
 
         var damaged = parts.Where(x => x.Damaged).ToList();
+        if (this.repairAttempts == 0 || this.repairAttempts % 8 == 0)
+        {
+            this.log.Information(
+                $"[SubOps/repair] {this.currentSlot + 1} 号艇耐久 "
+                + string.Join(", ", parts.Select(p => $"{p.Slot}={p.Condition}"))
+                + $"，坏件 {damaged.Count} 个（{diagnostic}）");
+        }
         if (damaged.Count == 0)
         {
             if (this.repairAttempts > 0)
@@ -1168,5 +1181,12 @@ public sealed class SubmarineRunner
         this.Say("停止：" + message);
     }
 
-    private void Say(string message) => this.chat.Print($"[SubOps] {message}");
+    private void Say(string message)
+    {
+        this.chat.Print($"[SubOps] {message}");
+
+        // 聊天框会被刷掉，日志留下来：修理不生效时直接翻 dalamud.log 就能看到
+        // 容器读没读到、耐久读到多少、命令下发了几条。
+        this.log.Information($"[SubOps] {message}");
+    }
 }
