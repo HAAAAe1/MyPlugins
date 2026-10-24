@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game;
 
 namespace SubOps;
@@ -270,5 +271,64 @@ public static unsafe class Workshop
         }
 
         return count;
+    }
+
+    // ─────────────────── 当前潜艇索引（照 DailyRoutines 的做法） ───────────────────
+
+    /// <summary>
+    /// 游戏内部的「当前查看的潜艇索引」。
+    /// DailyRoutines 用这条特征码拿到一个静态 int 的地址再读值，而不是去猜「列表第几行」。
+    /// 这里照抄同一套；扫不到时返回 -1，由调用方退回自己的槽位。
+    /// </summary>
+    private const string CurrentSubmarineIndexSignature = "48 8D 0D ?? ?? ?? ?? 80 A3";
+
+    private static ISigScanner? sigScanner;
+    private static IPluginLog? log;
+    private static nint currentSubmarineIndexAddress;
+    private static bool currentSubmarineIndexScanned;
+
+    public static void Initialize(ISigScanner scanner, IPluginLog pluginLog)
+    {
+        sigScanner = scanner;
+        log = pluginLog;
+    }
+
+    /// <summary>游戏内部当前潜艇索引；读不到返回 -1。</summary>
+    public static unsafe int CurrentSubmarineIndex
+    {
+        get
+        {
+            try
+            {
+                if (!currentSubmarineIndexScanned)
+                {
+                    currentSubmarineIndexScanned = true;
+
+                    if (sigScanner != null
+                        && sigScanner.TryScanText(CurrentSubmarineIndexSignature, out var match)
+                        && match != nint.Zero)
+                    {
+                        // lea rcx, [rip + disp32] 是 7 字节指令：目标 = 指令尾 + disp32
+                        var displacement = *(int*)(match + 3);
+                        currentSubmarineIndexAddress = match + 7 + displacement;
+                        log?.Information($"[SubOps] 当前潜艇索引静态地址 = 0x{currentSubmarineIndexAddress:X}");
+                    }
+                    else
+                    {
+                        log?.Warning("[SubOps] 扫不到「当前潜艇索引」特征码，改用菜单槽位");
+                    }
+                }
+
+                if (currentSubmarineIndexAddress == nint.Zero)
+                    return -1;
+
+                var index = *(int*)currentSubmarineIndexAddress;
+                return index is >= 0 and <= 3 ? index : -1;
+            }
+            catch
+            {
+                return -1;
+            }
+        }
     }
 }

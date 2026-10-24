@@ -48,6 +48,7 @@ public sealed class Plugin : IDalamudPlugin
         IGameGui gui,
         ICondition condition,
         IChatGui chat,
+        ISigScanner sigScanner,
         IPluginLog log)
     {
         this.pluginInterface = pluginInterface;
@@ -58,6 +59,7 @@ public sealed class Plugin : IDalamudPlugin
         this.chat = chat;
         this.gui = gui;
         this.log = log;
+        Workshop.Initialize(sigScanner, log);
 
         this.configuration = pluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
         this.configuration.Migrate();
@@ -520,6 +522,7 @@ public sealed class Plugin : IDalamudPlugin
     {
         var (ceruleum, material) = Workshop.ReadMaterials();
         this.chat.Print($"[SubOps] 工房内={Workshop.InWorkshop}  修理材料={material}  青磷水={ceruleum}");
+        this.chat.Print($"[SubOps] 游戏内当前潜艇索引={Workshop.CurrentSubmarineIndex}（-1 = 特征码没扫到，会退回菜单槽位）");
 
         if (!Workshop.InWorkshop)
         {

@@ -755,37 +755,15 @@ public sealed class SubmarineRunner
             return;
         }
 
-        // ② 出航确认页：先修耐久为 0 的零件，再点「出发」。
+        // ② 出航确认页：**先确认要不要维修、修到没有坏件，再点出发**。
+        // 顺序照 DailyRoutines 的 EnqueueSubmarineStateCheck：
+        //   等详情页就绪 → 检查部件 → 有 Condition==0 就下发修理 → 复查 → 没了才 Callback(0)。
+        // 那句「无法进行出港，需要修理配件」是窗口上的常驻提示，不是点出发后的报错，
+        // 所以绝不能靠「点一下看游戏拦不拦」来判断——必须自己先查耐久。
         if (AddonHelper.IsShown(this.gui, AddonHelper.ExplorationDetail))
         {
-            if (this.config.AutoRepair && this.TryRepairParts())
+            if (this.config.AutoRepair && !this.RepairBeforeDepart())
                 return;
-
-            // 修完还要再确认一次：只要还有坏零件（或者干脆读不到零件）就**绝对不能**点「出发」，
-            // 否则游戏弹「无法进行出港，需要修理配件」，而我们却把这艘记成已处理——
-            // 这就是「不会修理、直接跳过」的由来。
-            if (this.config.AutoRepair && this.currentSlot is >= 0 and < 4)
-            {
-                if (!Workshop.TryReadParts(this.currentSlot, out var parts, out var diagnostic))
-                {
-                    // 读不到 ≠ 不用修。读不到时点出发等于赌运气，直接判这艘不可出航。
-                    this.Say($"读不到零件数据（{diagnostic}），这艘不点出发。");
-                    AddonHelper.Close(this.gui, AddonHelper.ExplorationDetail);
-                    this.MarkSlotDone(this.currentSlot, "零件数据读取失败，已跳过");
-                    this.Delay(1.2);
-                    return;
-                }
-
-                if (parts.Any(x => x.Damaged))
-                {
-                    var left = parts.Count(x => x.Damaged);
-                    this.Say($"{this.currentSlot + 1} 号艇还有 {left} 个零件损坏、修不上，这艘先跳过。");
-                    AddonHelper.Close(this.gui, AddonHelper.ExplorationDetail);
-                    this.MarkSlotDone(this.currentSlot, "零件损坏未能修理，已跳过");
-                    this.Delay(1.2);
-                    return;
-                }
-            }
 
             if (!this.config.ReDispatch)
             {
@@ -884,108 +862,107 @@ public sealed class SubmarineRunner
     }
 
     /// <summary>
-    /// 修理当前这艘艇损坏的零件。底层走游戏的 RepairSubmarinePart(1153)，
-    /// 参数是 (潜艇槽位, 零件下标)，和 DailyRoutines 一致：不用点界面、不用选部位。
+    /// 出发前的维修确认。顺序完全照 DailyRoutines 的 EnqueueSubmarineStateCheck：
+    ///   ① 读当前这艘艇的 4 个零件（Condition == 0 就是损坏）
+    ///   ② 有损坏就全部下发 RepairSubmarinePart(1153, 潜艇索引, 零件下标)
+    ///   ③ 下一拍重新读，直到一个坏件都不剩，才允许点「出发」
     ///
-    /// 节奏也照 DR：**下发 → 下一拍重新读 → 还坏就再下发**，直到 Condition 变回 > 0。
-    /// 游戏不会立刻把耐久改回来，以前「发一次、等 1.2 秒、就点出发」必然被拒，
-    /// 屏幕上就是那句「无法进行出港，需要修理配件」。
+    /// 「无法进行出港，需要修理配件」是详情页上的常驻提示，不是点出发后的报错，
+    /// 所以不能靠「点一下看游戏拦不拦」判断——必须自己先读耐久。
+    /// 零件读不到时同样不放行，宁可空转等待，也不盲点出发。
     ///
-    /// 只修当前这艘（和 DR 一样省材料）。如果连发 6 拍这艘还是坏的，
-    /// 说明「菜单第几行」和「游戏内部潜艇索引」错位了，这时才退化成 4 个槽位全修。
+    /// 返回 true = 已确认无需维修，可以出发。
     /// </summary>
-    private bool TryRepairParts()
+    private bool RepairBeforeDepart()
     {
-        if (this.currentSlot is < 0 or > 3)
-            return false;
+        // 优先用游戏内部的「当前潜艇索引」（DailyRoutines 那套静态地址），
+        // 读不到再退回菜单里点的那一行。
+        var slot = Workshop.CurrentSubmarineIndex;
+        if (slot is < 0 or > 3)
+            slot = this.currentSlot;
 
-        if (this.repairAttempts >= MaxRepairTicks)
-            return false;
-
-        if (!Workshop.TryReadParts(this.currentSlot, out var parts, out var diagnostic))
+        if (slot is < 0 or > 3)
         {
-            // 读不到 = 还不知道坏没坏。空转等容器加载，绝不能返回 false 让上层去点出发。
-            this.repairAttempts++;
-            this.StatusText = $"等待零件数据…（{diagnostic}）";
-
-            if (this.repairAttempts == 1 || this.repairAttempts % 8 == 0)
-                this.log.Warning($"[SubOps/repair] 第 {this.repairAttempts} 拍读不到零件：{diagnostic}");
-
-            this.Delay(0.25);
+            this.log.Warning("[SubOps/repair] 拿不到当前潜艇索引，跳过维修检查");
             return true;
         }
 
-        var damaged = parts.Where(x => x.Damaged).ToList();
-        if (this.repairAttempts == 0 || this.repairAttempts % 8 == 0)
+        if (!Workshop.TryReadParts(slot, out var parts, out var diagnostic))
         {
-            this.log.Information(
-                $"[SubOps/repair] {this.currentSlot + 1} 号艇耐久 "
-                + string.Join(", ", parts.Select(p => $"{p.Slot}={p.Condition}"))
-                + $"，坏件 {damaged.Count} 个（{diagnostic}）");
-        }
-        if (damaged.Count == 0)
-        {
-            if (this.repairAttempts > 0)
-                this.Say($"{this.currentSlot + 1} 号艇零件已修好，准备出发。");
+            this.repairAttempts++;
+            this.StatusText = $"确认 {slot + 1} 号艇零件状态…（{diagnostic}）";
 
-            this.repairAttempts = 0;
+            if (this.repairAttempts == 1 || this.repairAttempts % 20 == 0)
+                this.log.Warning($"[SubOps/repair] 读不到 {slot + 1} 号艇零件：{diagnostic}");
+
+            if (this.repairAttempts >= MaxRepairTicks)
+            {
+                this.Say($"读不到 {slot + 1} 号艇的零件数据（{diagnostic}），这艘不出发。");
+                AddonHelper.Close(this.gui, AddonHelper.ExplorationDetail);
+                this.MarkSlotDone(slot, "零件数据读不到，已跳过");
+                this.repairAttempts = 0;
+                this.Delay(1.0);
+            }
+            else
+            {
+                this.Delay(0.25);
+            }
+
             return false;
         }
 
-        var (_, material) = Workshop.ReadMaterials();
+        var damaged = parts.Where(x => x.Damaged).ToList();
 
-        var pending = new List<(int Slot, int Part)>();
-        if (this.repairAttempts < 6)
+        if (this.repairAttempts == 0 || this.repairAttempts % 8 == 0)
         {
-            // 正常路径：只修眼前这艘。
-            foreach (var part in damaged)
-                pending.Add((this.currentSlot, part.Slot));
-        }
-        else
-        {
-            // 兜底：菜单下标和内部槽位错位时，四艘一起修，保证眼前这艘一定被修到。
-            for (var slot = 0; slot < 4; slot++)
-            {
-                if (slot == this.currentSlot)
-                {
-                    foreach (var part in damaged)
-                        pending.Add((slot, part.Slot));
-                    continue;
-                }
-
-                if (!Workshop.TryReadParts(slot, out var others))
-                    continue;
-
-                foreach (var part in others.Where(x => x.Damaged))
-                    pending.Add((slot, part.Slot));
-            }
+            this.log.Information(
+                $"[SubOps/repair] {slot + 1} 号艇耐久 "
+                + string.Join(", ", parts.Select(p => $"{p.Slot}={p.Condition}"))
+                + $"，坏件 {damaged.Count} 个（{diagnostic}）");
         }
 
+        // ③ 没有坏件了，才放行去点出发
+        if (damaged.Count == 0)
+        {
+            if (this.repairAttempts > 0)
+                this.Say($"{slot + 1} 号艇已确认无损坏零件，出发。");
+
+            this.repairAttempts = 0;
+            return true;
+        }
+
+        // ② 有坏件：全部下发修理命令，然后等下一拍复查
         var sent = 0;
-        foreach (var (slot, part) in pending)
+        foreach (var part in damaged)
         {
-            if (material > 0 && sent >= material)
-                break;
-
-            if (Workshop.RepairPart(slot, part))
+            if (Workshop.RepairPart(slot, part.Slot))
                 sent++;
         }
 
         this.repairAttempts++;
-        this.StatusText = $"修理零件（第 {this.repairAttempts} 次，下发 {sent} 条）…";
+        this.StatusText = $"维修 {slot + 1} 号艇（{damaged.Count} 个零件坏，已下发 {sent} 条）…";
 
-        if (this.repairAttempts == 1 || this.repairAttempts % 4 == 0 || sent == 0)
+        if (this.repairAttempts == 1 || this.repairAttempts % 8 == 0 || sent == 0)
         {
             this.Say(
-                $"修理 {this.currentSlot + 1} 号艇：{damaged.Count} 个零件耐久为 0，"
-                + $"下发 {sent} 条命令（修理材料 {material}，第 {this.repairAttempts} 次）");
+                $"{slot + 1} 号艇检测到 {damaged.Count} 个零件耐久为 0，"
+                + $"下发 {sent} 条修理命令（第 {this.repairAttempts} 次）");
         }
 
-        if (material <= 0)
-            this.Say("「魔导机械修理材料」数量为 0，这艘修不了。");
+        // 修了 30 秒还是坏的：多半是修理材料没了，或者下标对不上。
+        // 这种情况绝不点出发，把这艘跳过，让流程继续往下走。
+        if (this.repairAttempts >= MaxRepairTicks)
+        {
+            this.Say($"{slot + 1} 号艇维修 {this.repairAttempts} 次仍有坏件，这艘不出发。");
+            AddonHelper.Close(this.gui, AddonHelper.ExplorationDetail);
+            this.MarkSlotDone(slot, "零件修不好，已跳过");
+            this.repairAttempts = 0;
+            this.Delay(1.0);
+            return false;
+        }
 
         this.Delay(0.25);
-        return true;
+        return false;
     }
 
     /// <summary>
@@ -1000,10 +977,7 @@ public sealed class SubmarineRunner
     {
         var entries = AddonHelper.ReadMenuEntries(this.gui);
         if (entries.Count == 0)
-        {
-            this.Delay(0.25);
             return;
-        }
 
         // ── 收尾：一路按退出，把列表 → 主菜单 → 关闭 逐层关干净 ──
         if (this.finishing)
