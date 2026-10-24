@@ -1,0 +1,20 @@
+<Project Sdk="Dalamud.NET.Sdk/15.0.0">
+
+  <PropertyGroup>
+    <Version>1.0.0</Version>
+    <Author>HAAAAe1</Author>
+    <Name>SubFleet</Name>
+    <Punchline>部队工房潜水艇：收取、修理、再出航，多角色自动轮换</Punchline>
+    <Description>照 DailyRoutines 的顺序重写的潜水艇作业插件：进屋 → 航行管制面板 → 逐艘确认远航报告 → 读零件耐久并把耐久为 0 的零件修好 → 按原航线再次出航。全部处理完自动切下一个角色（需要 Lifestream）。</Description>
+    <RepoUrl>https://github.com/HAAAAe1/MyPlugins</RepoUrl>
+    <Tags>潜水艇;工房;部队;submarine;workshop;fc;多角色</Tags>
+    <CategoryTags>utility</CategoryTags>
+    <AssemblyName>SubFleet</AssemblyName>
+    <RootNamespace>SubFleet</RootNamespace>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
+  </PropertyGroup>
+
+</Project>

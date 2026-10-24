@@ -1,5 +1,36 @@
 [
   {
+    "Name": "SubFleet",
+    "InternalName": "SubFleet",
+    "AssemblyVersion": "1.0.0.0",
+    "Author": "HAAAAe1",
+    "Punchline": "部队工房潜艇：收取、修理、再出航，多角色自动轮换",
+    "Description": "照 DailyRoutines 的顺序重写的潜艇作业插件：进屋 → 航行管制面板 → 逐个确认远航报告 → 读零件耐久、把耐久为 0 的零件修好 → 按原航线再次出航。全部处理完自动切下一个角色（需要 Lifestream）。场景移动用瞬移，不需要 vnavmesh 寻路。",
+    "Changelog": "1.0.0：全新重写，不是 SubOps 的延续。整个流程照 DailyRoutines 的 AutoSubmarineCollect：① 用任务队列（一步做完才走下一步）代替原来的窗口状态机，「该收哪艘」只认游戏里的返航时间；② 修理严格按 DR 的节奏——读 4 个零件、耐久为 0 的全部下发 RepairSubmarinePart(1153)、下一拍重读、直到一个坏件都不剩才点「出发」，读不到零件就等，等不到就跳过这艘、绝不盲点出发；③ 当前潜艇下标用 DR 那套静态地址（48 8D 0D ?? ?? ?? ?? 80 A3），扫不到才退回菜单里选的那一行；④ 已经在面板前就只交互、不再瞬移，瞬移只在超出交互距离时发生；⑤ 确认框里含「离开」一律点「否」，不会再进屋又自己出去；⑥ 多角色按名册顺序轮换，切号走 Lifestream，失败上 30 分钟冷却跳过。命令：/subfleet（或 /sf）、run、sweep、stop、status、char、debug。",
+    "ApplicableVersion": "any",
+    "LoadPriority": 0,
+    "Tags": [
+      "潜水艇",
+      "工房",
+      "部队",
+      "submarine",
+      "workshop",
+      "fc",
+      "多角色"
+    ],
+    "CategoryTags": [
+      "utility"
+    ],
+    "DalamudApiLevel": 15,
+    "AcceptsFeedback": true,
+    "IsHide": false,
+    "LastUpdate": 1792858372,
+    "DownloadCount": 0,
+    "RepoUrl": "https://github.com/HAAAAe1/MyPlugins",
+    "DownloadLinkInstall": "https://raw.githubusercontent.com/HAAAAe1/MyPlugins/main/dist/SubFleet-1.0.0.zip",
+    "DownloadLinkUpdate": "https://raw.githubusercontent.com/HAAAAe1/MyPlugins/main/dist/SubFleet-1.0.0.zip"
+  },
+  {
     "Name": "SubOps",
     "InternalName": "SubOps",
     "AssemblyVersion": "0.5.8.0",

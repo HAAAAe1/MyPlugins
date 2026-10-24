@@ -18,6 +18,7 @@
 
 | 名称 | 版本 | 说明 |
 |------|------|------|
+| **SubFleet** | 1.0.0 | 部队工房潜艇作业，全新重写版：按 DailyRoutines 的顺序收取、修理、再出航，多角色按名册轮换。切角色需要 Lifestream |
 | **SubOps** | 0.5.8 | 部队工房潜水艇作业：一键收取、自动修理、重新委派，支持多角色轮换。带配置窗口（名册 / 实时状态 / 行为 / 校准）。场景移动用瞬移，不需要 vnavmesh；切角色需要 Lifestream |
 
 ## 说明
@@ -33,6 +34,18 @@
 - `ApplicableVersion` 填 `"any"` 是合法的，表示不限制游戏版本。
 - 第三方仓库**不能覆盖**官方仓库里已存在的 `InternalName`，同名条目会被整条丢弃（安全策略）。
 - 仓库地址必须返回**原始 JSON**（`raw.githubusercontent.com` 这种），填 GitHub 网页地址会解析失败。
+
+## 发布 SubFleet
+
+```bash
+cd SubFleet
+dotnet build -c Release
+cd ../MyPlugins
+rm -f dist/SubFleet-<版本>.zip
+(cd ../SubFleet/bin/Release && zip -q ../../../MyPlugins/dist/SubFleet-<版本>.zip SubFleet.dll SubFleet.json)
+```
+
+然后改 `pluginmaster.json` 里 SubFleet 的 `AssemblyVersion` / 两个 `DownloadLink` / `LastUpdate`。
 
 ## 发布 SubOps
 

@@ -1,0 +1,23 @@
+<Project>
+
+  <!--
+    国服 Dalamud 装在 %APPDATA%\XIVLauncherCN 下，而 Dalamud.NET.Sdk 默认写死了
+    %APPDATA%\XIVLauncher\addon\Hooks\dev\，并且会**无条件覆盖** DalamudLibPath，
+    所以改 DalamudLibPath 没用 —— 必须用 DALAMUD_HOME：在 SDK 里它是最后一步判断，
+    只要非空就顶掉默认值。
+
+    下面的属性只在「国服目录存在」时才生效：
+      - 本机（国服）→ 指向 XIVLauncherCN 的 Hooks，编译通过
+      - GitHub Actions（只装国际服 Dalamud）→ 条件不成立，走 SDK 默认路径，同样能编译
+
+    国服 Hooks 下有两个目录：dev（固定名）和版本号目录（如 26-10-21-01）。
+    优先用 dev，它不会随版本更新改名。若 dev 缺失而日期目录也变了，
+    直接命令行覆盖：dotnet build -c Release -p:DALAMUD_HOME="...\Hooks\<新目录>"
+  -->
+  <PropertyGroup Condition="'$(DALAMUD_HOME)' == '' AND Exists('$(APPDATA)\XIVLauncherCN\addon\Hooks')">
+    <_CnHooksRoot>$(APPDATA)\XIVLauncherCN\addon\Hooks</_CnHooksRoot>
+    <DALAMUD_HOME Condition="Exists('$(_CnHooksRoot)\dev\Dalamud.dll')">$(_CnHooksRoot)\dev</DALAMUD_HOME>
+    <DALAMUD_HOME Condition="'$(DALAMUD_HOME)' == '' AND Exists('$(_CnHooksRoot)\26-10-21-01\Dalamud.dll')">$(_CnHooksRoot)\26-10-21-01</DALAMUD_HOME>
+  </PropertyGroup>
+
+</Project>

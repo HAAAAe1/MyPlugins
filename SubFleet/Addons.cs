@@ -1,0 +1,224 @@
+using System;
+using System.Collections.Generic;
+using Dalamud.Plugin.Services;
+using FFXIVClientStructs.FFXIV.Client.UI;
+using FFXIVClientStructs.FFXIV.Component.GUI;
+
+namespace SubFleet;
+
+/// <summary>
+/// 窗口（Addon）读写。
+///
+/// 菜单文字从 <c>AtkValues[i + 7]</c> 读（DailyRoutines 的 AddonSelectStringEvent 就是这么扫的）。
+/// 不要读 PopupMenu 里缓存的 EntryNames：那份数据在部分窗口上还停在上一次的内容，
+/// 会出现「菜单里明明是『出发』却匹配不到」。
+/// </summary>
+public static unsafe class Addons
+{
+    public const string SelectString = "SelectString";
+    public const string SelectYesno = "SelectYesno";
+    public const string Result = "AirShipExplorationResult";
+    public const string Detail = "AirShipExplorationDetail";
+    public const string PartsMenu = "AirShipPartsMenu";
+
+    /// <summary>SelectString 的菜单项文字从这个下标开始。</summary>
+    private const int MenuTextOffset = 7;
+
+    private static IGameGui? gui;
+    private static IPluginLog? log;
+
+    public static void Initialize(IGameGui gameGui, IPluginLog pluginLog)
+    {
+        gui = gameGui;
+        log = pluginLog;
+    }
+
+    /// <summary>取窗口指针；不可见或未就绪时返回 null。</summary>
+    public static AtkUnitBase* Get(string name)
+    {
+        if (gui == null)
+            return null;
+
+        var addon = gui.GetAddonByName<AtkUnitBase>(name);
+        if (addon == null || !addon->IsVisible || !addon->IsReady)
+            return null;
+
+        return addon;
+    }
+
+    /// <summary>只要求可见，不要求 ready（有些窗口初始那一帧 ready 还是 false）。</summary>
+    public static bool Shown(string name)
+    {
+        if (gui == null)
+            return false;
+
+        var addon = gui.GetAddonByName<AtkUnitBase>(name);
+        return addon != null && addon->IsVisible;
+    }
+
+    public static bool Ready(string name) => Get(name) != null;
+
+    /// <summary>按下标触发回调（菜单项第几行 / 按钮第几个）。</summary>
+    public static bool Fire(string name, int index)
+    {
+        var addon = Get(name);
+        return addon != null && addon->FireCallbackInt(index);
+    }
+
+    public static void Close(string name)
+    {
+        var addon = Get(name);
+        if (addon == null)
+            return;
+
+        addon->Close(true);
+    }
+
+    public static void Hide(string name)
+    {
+        var addon = gui?.GetAddonByName<AtkUnitBase>(name);
+        if (addon != null && addon->IsVisible)
+            addon->IsVisible = false;
+    }
+
+    /// <summary>把窗口里的字符串值按顺序读出来。</summary>
+    public static List<string> Strings(string name)
+    {
+        var result = new List<string>();
+        var addon = Get(name);
+        if (addon == null)
+            return result;
+
+        foreach (var value in addon->AtkValuesSpan)
+        {
+            var kind = value.Type & AtkValueType.TypeMask;
+            if (kind is not (AtkValueType.String or AtkValueType.ConstString or AtkValueType.WideString))
+                continue;
+
+            var text = value.String.ToString();
+            if (!string.IsNullOrWhiteSpace(text))
+                result.Add(text);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// 读 SelectString 的菜单项文字。
+    /// EntryCount 为 0 的窗口（单艘艇菜单）就自己往下数，直到读到空值。
+    /// </summary>
+    public static List<string> MenuEntries()
+    {
+        var result = new List<string>();
+
+        var addon = gui?.GetAddonByName<AddonSelectString>(SelectString);
+        if (addon == null || !addon->AtkUnitBase.IsVisible || addon->AtkUnitBase.AtkValues == null)
+            return result;
+
+        var entryCount = Math.Clamp((int)addon->PopupMenu.EntryCount, 0, 32);
+        var guess = entryCount == 0;
+        var limit = guess ? 24 : entryCount;
+
+        // AtkValues 的实际长度可能小于 EntryCount（窗口刚刷新那一帧），
+        // 越界读会读到垃圾字符串甚至崩，所以先夹一下。
+        var available = Math.Max(0, addon->AtkUnitBase.AtkValuesCount - MenuTextOffset);
+        if (available > 0 && limit > available)
+            limit = available;
+
+        var values = addon->AtkUnitBase.AtkValues;
+
+        for (var i = 0; i < limit; i++)
+        {
+            var value = values[i + MenuTextOffset];
+            var kind = value.Type & AtkValueType.TypeMask;
+            if (kind == AtkValueType.Null)
+            {
+                if (guess)
+                    break;
+
+                result.Add(string.Empty);
+                continue;
+            }
+
+            string text;
+            try
+            {
+                text = value.String.ToString();
+            }
+            catch
+            {
+                text = string.Empty;
+            }
+
+            result.Add(text.Trim());
+        }
+
+        return result;
+    }
+
+    /// <summary>菜单标题（SelectString 的 AtkValues[2]）。</summary>
+    public static string MenuTitle()
+    {
+        var addon = gui?.GetAddonByName<AddonSelectString>(SelectString);
+        if (addon == null || addon->AtkUnitBase.AtkValues == null || addon->AtkUnitBase.AtkValuesCount < 3)
+            return string.Empty;
+
+        try
+        {
+            return addon->AtkUnitBase.AtkValues[2].String.ToString();
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    /// <summary>按关键字在菜单里找下标，任意一个命中都算；找不到返回 -1。</summary>
+    public static int FindEntry(IReadOnlyList<string> entries, params string[] keywords)
+    {
+        for (var i = 0; i < entries.Count; i++)
+        {
+            var text = entries[i];
+            if (string.IsNullOrEmpty(text))
+                continue;
+
+            foreach (var keyword in keywords)
+            {
+                if (text.Contains(keyword, StringComparison.OrdinalIgnoreCase))
+                    return i;
+            }
+        }
+
+        return -1;
+    }
+
+    /// <summary>
+    /// 「是 / 否」确认框。
+    ///
+    /// 「要进入这间房屋吗？」和「要离开这间房屋吗？」是同一个窗口。
+    /// 一律点「是」的话，人在大厅里误交互到出口就会被送出去——以前就是这样
+    /// 「刚进屋又自己走了」。含「离开」的一律点「否」。
+    /// </summary>
+    public static bool Yesno(out string text)
+    {
+        text = string.Empty;
+        var addon = Get(SelectYesno);
+        if (addon == null)
+            return false;
+
+        var strings = Strings(SelectYesno);
+        text = strings.Count > 0 ? strings[0] : string.Empty;
+
+        var isLeave = text.Contains("离开", StringComparison.Ordinal)
+                      || text.Contains("離", StringComparison.Ordinal)
+                      || (text.Contains("出", StringComparison.Ordinal) && text.Contains("房屋", StringComparison.Ordinal));
+
+        var index = isLeave ? 1 : 0;
+        addon->FireCallbackInt(index);
+
+        if (log != null)
+            log.Debug($"[SubFleet] Yesno({(isLeave ? "否" : "是")}): {text}");
+
+        return true;
+    }
+}
