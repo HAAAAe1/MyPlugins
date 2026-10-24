@@ -2,11 +2,11 @@
   {
     "Name": "SubFleet",
     "InternalName": "SubFleet",
-    "AssemblyVersion": "1.0.8.0",
+    "AssemblyVersion": "1.0.7.0",
     "Author": "HAAAAe1",
     "Punchline": "部队工房潜艇：收取、修理、再出航，多角色自动轮换",
     "Description": "照 DailyRoutines 的顺序重写的潜艇作业插件：进屋 → 航行管制面板 → 逐个确认远航报告 → 读零件耐久、把耐久为 0 的零件修好 → 按原航线再次出航。全部处理完自动切下一个角色（需要 Lifestream）。场景移动用瞬移，不需要 vnavmesh 寻路。",
-    "Changelog": "1.0.8：完全照旧插件 SubOps 的做法走出航，不再点「再次出发」。① 远航报告窗口点右边「确认完毕」(callback 1)，**点完不关窗、不隐藏、不做任何下一步**，只等游戏自己把窗口换成出航确认页（以前点的是「再次出发」，窗口一关没有任何后续，就去重开面板，所以你看到「点完报告又把潜艇面板点出来」）；② 点完报告后进入等待确认页的状态（最多 10 秒），这期间绝不重新打开面板；③ 单艘艇菜单照旧插件：先「上次的远航报告」（第 2 项），再「出发」打开确认页，确认页修完零件才点出发；④ 取窗口改成「名字必须完全相同」，以前按前缀找，查「选择航海图」会先命中「远航报告」；⑤ 「选择航海图」只出现在没有上次航线的艇上，遇到就取消并跳过这艘，不再退回菜单重走。",
+    "Changelog": "1.0.7：出航流程照旧插件（SubOps）走通：列表点一艘 → 单艘艇菜单先「上次的远航报告」再「出发」→ 远航报告点「再次出发」(callback 0) → 确认页修零件 → 出发。新增可拖动浮动图标。",
     "ApplicableVersion": "any",
     "LoadPriority": 0,
     "Tags": [
@@ -27,8 +27,8 @@
     "LastUpdate": 1792862921,
     "DownloadCount": 0,
     "RepoUrl": "https://github.com/HAAAAe1/MyPlugins",
-    "DownloadLinkInstall": "https://raw.githubusercontent.com/HAAAAe1/MyPlugins/main/dist/SubFleet-1.0.8.zip",
-    "DownloadLinkUpdate": "https://raw.githubusercontent.com/HAAAAe1/MyPlugins/main/dist/SubFleet-1.0.8.zip"
+    "DownloadLinkInstall": "https://raw.githubusercontent.com/HAAAAe1/MyPlugins/main/dist/SubFleet-1.0.7.zip",
+    "DownloadLinkUpdate": "https://raw.githubusercontent.com/HAAAAe1/MyPlugins/main/dist/SubFleet-1.0.7.zip"
   },
   {
     "Name": "SubOps",
