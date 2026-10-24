@@ -22,6 +22,9 @@ public sealed class Roster
 
     private DateTime lastSnapshotAt = DateTime.MinValue;
 
+    /// <summary>上一次记进日志的角色，避免每帧刷同一条。</summary>
+    private ulong lastLoggedInContentId;
+
     public Roster(Config config, IClientState clientState, IPlayerState playerState, IChatGui chat, IPluginLog log, Action save)
     {
         this.config = config;
@@ -41,6 +44,7 @@ public sealed class Roster
         if (!this.LoggedIn)
         {
             this.Current = null;
+            this.lastLoggedInContentId = 0;
             return;
         }
 
@@ -67,6 +71,13 @@ public sealed class Roster
         }
 
         this.Current = entry;
+
+        // 日志里带上名字，出问题时一眼看出是哪一站：切号之后只有「已登录」三个字根本对不上人。
+        if (this.lastLoggedInContentId != cid)
+        {
+            this.lastLoggedInContentId = cid;
+            this.log.Information($"[SubFleet] 当前角色：{entry.Key}");
+        }
 
         if (Workshop.InWorkshop && DateTime.UtcNow - this.lastSnapshotAt > TimeSpan.FromSeconds(10))
         {

@@ -214,11 +214,24 @@ public sealed class Plugin : IDalamudPlugin
     private void DumpDebug()
     {
         this.chat.Print($"[SubFleet] 工房={Workshop.InWorkshop} 房内={Workshop.InHouse} 庭院={Workshop.Outdoors} 区域={this.clientState.TerritoryType}");
+        this.chat.Print($"[SubFleet] 玩家坐标：{Move.Fmt(this.move.PlayerPosition)}");
 
         if (Housing.TryGetFcEstate(out var estate))
         {
             var plot = estate.HasPlotPosition ? estate.PlotPosition.ToString("F1") : "未知";
             this.chat.Print($"[SubFleet] 部队房屋：区域 {estate.TerritoryId} · {estate.WardIndex + 1} 区 {estate.PlotIndex + 1} 号 · 地块坐标 {plot}");
+
+            var door = this.move.NearestByBaseIdTo(Collector.HouseEntranceDataId, estate.PlotPosition, 120f);
+            if (door == null)
+            {
+                this.chat.Print("[SubFleet] 房屋入口：附近没找到（120m 内没有 DataId 2002737 的物件）");
+            }
+            else
+            {
+                this.chat.Print(
+                    $"[SubFleet] 房屋入口：{Move.Fmt(door.Position)} · 距离 {this.move.DistanceTo(door.Position):F1}m"
+                    + $" · 平面 {this.move.FlatDistanceTo(door.Position):F1}m");
+            }
         }
         else
         {

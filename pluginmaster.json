@@ -2,11 +2,11 @@
   {
     "Name": "SubFleet",
     "InternalName": "SubFleet",
-    "AssemblyVersion": "1.0.5.0",
+    "AssemblyVersion": "1.0.6.0",
     "Author": "HAAAAe1",
     "Punchline": "部队工房潜艇：收取、修理、再出航，多角色自动轮换",
     "Description": "照 DailyRoutines 的顺序重写的潜艇作业插件：进屋 → 航行管制面板 → 逐个确认远航报告 → 读零件耐久、把耐久为 0 的零件修好 → 按原航线再次出航。全部处理完自动切下一个角色（需要 Lifestream）。场景移动用瞬移，不需要 vnavmesh 寻路。",
-    "Changelog": "1.0.5：名册可以自己排顺序了——每行前面加了 ↑ ↓ 按钮，另外有「按返航时间排序」（返航时间近的排前面，还没进过工房的排最后）和「当前角色置顶」两个一键按钮。顺序就是轮换顺序。排序时会认准「当前正在处理的那个角色」，改完把轮换游标挪回原位置，不会因为中途挪动而漏掉某个角色、也不会把同一个角色来回处理两遍。/sf char 也会带序号显示，方便对上界面里的顺序。",
+    "Changelog": "1.0.6：修「进不去房子、在房子周围左右瞬移」。根因是靠近目标的落点被算成「恰好离目标 N 米」，那个点正好压在判定线上，浮点误差一大就永远判「没到」，于是每隔三拍换一个 90° 方向重来，人就在门口来回弹，一路弹到进屋那一步的 6 分钟超时。现在照 DailyRoutines 的做法直接落到目标坐标上，判定距离留 0.4 米余量，并且改用带高度的距离（楼上不再被当成门口）；能识别「瞬移根本没落地」（被墙/台阶挡住），连续 3 次就停手、连续 9 次明确报「到不了房屋入口」并给出目标与实际坐标，不再无限绕圈。日志补全：记录当前角色名、每次靠近时的目标/玩家坐标与距离、瞬移没落地时的实际位置；/sf debug 增加玩家坐标与最近房屋入口的距离。",
     "ApplicableVersion": "any",
     "LoadPriority": 0,
     "Tags": [
@@ -24,11 +24,11 @@
     "DalamudApiLevel": 15,
     "AcceptsFeedback": true,
     "IsHide": false,
-    "LastUpdate": 1792860136,
+    "LastUpdate": 1792860903,
     "DownloadCount": 0,
     "RepoUrl": "https://github.com/HAAAAe1/MyPlugins",
-    "DownloadLinkInstall": "https://raw.githubusercontent.com/HAAAAe1/MyPlugins/main/dist/SubFleet-1.0.5.zip",
-    "DownloadLinkUpdate": "https://raw.githubusercontent.com/HAAAAe1/MyPlugins/main/dist/SubFleet-1.0.5.zip"
+    "DownloadLinkInstall": "https://raw.githubusercontent.com/HAAAAe1/MyPlugins/main/dist/SubFleet-1.0.6.zip",
+    "DownloadLinkUpdate": "https://raw.githubusercontent.com/HAAAAe1/MyPlugins/main/dist/SubFleet-1.0.6.zip"
   },
   {
     "Name": "SubOps",

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Numerics;
 using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Plugin.Services;
 
@@ -34,7 +35,7 @@ public enum RunOutcome
 /// </summary>
 public sealed unsafe class Collector
 {
-    private const uint HouseEntranceDataId = 2002737;
+    public const uint HouseEntranceDataId = 2002737;
     private const uint RoomSelectEventId = 721074;
     private const uint PanelEventId = 3276843;
 
@@ -404,6 +405,14 @@ public sealed unsafe class Collector
 
     private bool StepHouseEntrance()
     {
+        // 读图过程中瞬移会被丢掉（还会被记成一次「没站住」），先等图读完再算距离。
+        if (this.condition[ConditionFlag.BetweenAreas])
+        {
+            this.SetStatus("等区域加载…");
+            this.Wait(0.4);
+            return false;
+        }
+
         var hasEstate = Housing.TryGetFcEstate(out var estate);
 
         // 房屋入口的 DataId 全住宅区共用，按「离自家地块最近」挑，别跑去点别人家的门。
@@ -417,6 +426,9 @@ public sealed unsafe class Collector
             if (hasEstate && estate.HasPlotPosition && this.plotHops++ < 6)
             {
                 this.SetStatus("前往部队房屋…");
+                this.log.Information(
+                    $"[SubFleet] 附近没看到房屋入口，先跳到地块 {Move.Fmt(estate.PlotPosition)}"
+                    + $"（人在 {Move.Fmt(this.move.PlayerPosition)}，第 {this.plotHops} 次）");
                 this.move.Teleport(estate.PlotPosition);
                 this.Wait(0.8);
                 return false;
@@ -429,15 +441,18 @@ public sealed unsafe class Collector
 
         this.plotHops = 0;
 
-        if (!this.move.Approach(door.Position, 2.0f, Math.Min(this.approachTries / 3, 3)))
+        if (this.doorTries == 0)
         {
-            this.approachTries++;
-            this.SetStatus("靠近房屋入口…");
-            this.Wait(0.25);
-            return false;
+            this.log.Information(
+                $"[SubFleet] 房屋入口：门 {Move.Fmt(door.Position)} · 玩家 {Move.Fmt(this.move.PlayerPosition)}"
+                + $" · 距离 {this.move.DistanceTo(door.Position):F1}m"
+                + (hasEstate && estate.HasPlotPosition
+                    ? $" · 地块 {Move.Fmt(estate.PlotPosition)}"
+                    : " · 读不到地块坐标，按离玩家最近挑门（可能是别人的门）"));
         }
 
-        this.approachTries = 0;
+        if (!this.TryApproach(door.Position, 2.0f, "房屋入口"))
+            return false;
 
         if (this.doorTries++ > 12)
         {
@@ -542,15 +557,8 @@ public sealed unsafe class Collector
             return false;
         }
 
-        if (!this.move.Approach(position, 1.8f, Math.Min(this.approachTries / 3, 3)))
-        {
-            this.approachTries++;
-            this.SetStatus("靠近房间入口…");
-            this.Wait(0.25);
+        if (!this.TryApproach(position, 1.8f, "房间入口"))
             return false;
-        }
-
-        this.approachTries = 0;
         this.move.InteractRaw(address);
         this.SetStatus("打开房间列表…");
         this.Wait(1.2);
@@ -574,15 +582,8 @@ public sealed unsafe class Collector
             return false;
         }
 
-        if (!this.move.Approach(position, 2.2f, Math.Min(this.approachTries / 3, 3)))
-        {
-            this.approachTries++;
-            this.SetStatus("靠近航行管制面板…");
-            this.Wait(0.25);
+        if (!this.TryApproach(position, 2.2f, "航行管制面板"))
             return false;
-        }
-
-        this.approachTries = 0;
 
         if (this.panelTries++ > 12)
         {
@@ -597,8 +598,54 @@ public sealed unsafe class Collector
         return false;
     }
 
-    // ───────────────────────── 第三步：收 ─────────────────────────
+    /// <summary>
+    /// 靠到目标旁边，带统一的重试/放弃策略。
+    ///
+    /// 以前四个调用点各写一遍 `if (!Approach(...)) { approachTries++; Wait(0.25); }`，
+    /// 问题是 <see cref="Move.Approach"/> 只有 true/false：瞬移连续落不下去时也返回 false，
+    /// 于是外面看起来跟「正在路上」一模一样，只能靠步骤超时兜底（进屋那步是 6 分钟）。
+    /// 现在区分出 Blocked，连落不下去 9 次就明确失败，别再围着房子左右弹。
+    /// </summary>
+    private bool TryApproach(Vector3 position, float standOff, string what)
+    {
+        if (this.approachTries == 0)
+        {
+            this.log.Information(
+                $"[SubFleet] 靠近{what}：目标 {Move.Fmt(position)} · 玩家 {Move.Fmt(this.move.PlayerPosition)}"
+                + $" · 距离 {this.move.DistanceTo(position):F1}m");
+        }
 
+        var result = this.move.Approach(position, standOff, this.approachTries / 3);
+
+        if (result == ApproachResult.Arrived)
+        {
+            if (this.approachTries > 0)
+                this.log.Information($"[SubFleet] 已到{what}旁边（{this.move.DistanceTo(position):F1}m）");
+
+            this.approachTries = 0;
+            return true;
+        }
+
+        this.approachTries++;
+
+        if (result == ApproachResult.Blocked && this.approachTries > 9)
+        {
+            this.Fail(
+                $"到不了{what}：瞬移连续 {this.approachTries} 次没落地"
+                + $"（目标 {Move.Fmt(position)}，人在 {Move.Fmt(this.move.PlayerPosition)}）。"
+                + "先手动走到目标旁边再点「收取当前角色」。");
+            return false;
+        }
+
+        this.SetStatus(result == ApproachResult.Blocked
+            ? $"靠近{what}…（落点站不住，第 {this.approachTries} 次）"
+            : $"靠近{what}…");
+
+        this.Wait(result == ApproachResult.Blocked ? 0.5 : 0.25);
+        return false;
+    }
+
+    // ───────────────────────── 第三步：收 ─────────────────────────
     private bool StepCollect()
     {
         // 上一艘点了出发：先核对到底走没走，再继续下一艘
@@ -668,15 +715,8 @@ public sealed unsafe class Collector
             return false;
         }
 
-        if (!this.move.Approach(position, 2.2f, Math.Min(this.approachTries / 3, 3)))
-        {
-            this.approachTries++;
-            this.SetStatus("靠近航行管制面板…");
-            this.Wait(0.25);
+        if (!this.TryApproach(position, 2.2f, "航行管制面板"))
             return false;
-        }
-
-        this.approachTries = 0;
 
         this.move.InteractRaw(address);
         this.expectList = false;   // 面板重新打开后又是主菜单，别把主菜单当成潜艇列表
