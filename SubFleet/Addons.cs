@@ -40,14 +40,31 @@ public static unsafe class Addons
         log = pluginLog;
     }
 
-    /// <summary>取窗口指针，不看可见/就绪状态（恢复窗口时要用）。</summary>
+    /// <summary>
+    /// 取窗口指针，不看可见/就绪状态（恢复窗口时要用的）。
+    ///
+    /// **必须校验名字全等**：Dalamud 取窗口是前缀匹配，
+    /// 查 <c>"AirShipExploration"</c> 会先命中 <c>AirShipExplorationResult</c>（远航报告）——
+    /// 于是「选择航海图」的判断会把远航报告窗口认成选图窗口，一去点它就把报告关掉，
+    /// 表现就是「刚点完上次的远航报告，又退出去点航海图」。
+    /// 这里逐 index 取候选，只认名字一模一样的那个。
+    /// </summary>
     public static AtkUnitBase* Raw(string name)
     {
         if (gui == null)
             return null;
 
-        var addon = gui.GetAddonByName<AtkUnitBase>(name);
-        return addon == null ? null : addon;
+        for (var i = 1; i <= 8; i++)
+        {
+            var addon = gui.GetAddonByName<AtkUnitBase>(name, i);
+            if (addon == null)
+                return null;
+
+            if (string.Equals(addon->Name.ToString(), name, StringComparison.Ordinal))
+                return addon;
+        }
+
+        return null;
     }
 
     /// <summary>取窗口指针；不可见或未就绪时返回 null。</summary>
@@ -91,10 +108,7 @@ public static unsafe class Addons
     /// <summary>只要求可见，不要求 ready（有些窗口初始那一帧 ready 还是 false）。</summary>
     public static bool Shown(string name)
     {
-        if (gui == null)
-            return false;
-
-        var addon = gui.GetAddonByName<AtkUnitBase>(name);
+        var addon = Raw(name);
         return addon != null && addon->IsVisible;
     }
 
