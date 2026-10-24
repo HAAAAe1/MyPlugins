@@ -33,17 +33,52 @@ public static unsafe class Addons
         log = pluginLog;
     }
 
-    /// <summary>取窗口指针；不可见或未就绪时返回 null。</summary>
-    public static AtkUnitBase* Get(string name)
+    /// <summary>取窗口指针，不看可见/就绪状态（恢复窗口时要用）。</summary>
+    public static AtkUnitBase* Raw(string name)
     {
         if (gui == null)
             return null;
 
         var addon = gui.GetAddonByName<AtkUnitBase>(name);
+        return addon == null ? null : addon;
+    }
+
+    /// <summary>取窗口指针；不可见或未就绪时返回 null。</summary>
+    public static AtkUnitBase* Get(string name)
+    {
+        var addon = Raw(name);
         if (addon == null || !addon->IsVisible || !addon->IsReady)
             return null;
 
         return addon;
+    }
+
+    /// <summary>
+    /// 窗口连节点都加载完了没有——这一条是照 DailyRoutines 的 <c>IsAddonAndNodesReady()</c> 写的。
+    ///
+    /// 光看 <c>IsReady</c> 不够：窗口刚弹出时 OnSetup 已经跑过（IsReady = true），
+    /// 但 ULD 节点还在加载（<c>UldManager.LoadedState &lt; 3</c>）。这时候发回调，
+    /// 游戏会**静默丢弃**——表现就是「确认了但没收取」「点了出发但没出航」。
+    /// </summary>
+    public static bool NodesReady(string name)
+    {
+        var addon = Raw(name);
+        if (addon == null || !addon->IsVisible || !addon->IsReady)
+            return false;
+
+        var state = (byte)addon->UldManager.LoadedState;
+        return state is 3 or 4;   // 3 = Loaded，4 = LoadError（窗口照样能用）
+    }
+
+    /// <summary>把之前被我们藏掉的窗口重新显示出来（游戏那边还以为它开着）。</summary>
+    public static bool ForceShow(string name)
+    {
+        var addon = Raw(name);
+        if (addon == null || addon->IsVisible)
+            return false;
+
+        addon->IsVisible = true;
+        return true;
     }
 
     /// <summary>只要求可见，不要求 ready（有些窗口初始那一帧 ready 还是 false）。</summary>
@@ -58,16 +93,27 @@ public static unsafe class Addons
 
     public static bool Ready(string name) => Get(name) != null;
 
-    /// <summary>按下标触发回调（菜单项第几行 / 按钮第几个）。</summary>
+    /// <summary>窗口是否存在（不管可不可见）。用来发现「被藏掉、但游戏还认为开着」的窗口。</summary>
+    public static bool Exists(string name) => Raw(name) != null;
+
+    /// <summary>
+    /// 按下标触发回调（菜单项第几行 / 按钮第几个）。
+    ///
+    /// **必须等节点加载完再发**：节点没加载完时发出去的回调会被游戏丢掉，
+    /// 而调用方看到的只是「窗口没动」。返回 false 就表示这次没发出去，要重试。
+    /// </summary>
     public static bool Fire(string name, int index)
     {
-        var addon = Get(name);
+        if (!NodesReady(name))
+            return false;
+
+        var addon = Raw(name);
         return addon != null && addon->FireCallbackInt(index);
     }
 
     public static void Close(string name)
     {
-        var addon = Get(name);
+        var addon = Raw(name);
         if (addon == null)
             return;
 

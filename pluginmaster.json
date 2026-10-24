@@ -2,11 +2,11 @@
   {
     "Name": "SubFleet",
     "InternalName": "SubFleet",
-    "AssemblyVersion": "1.0.3.0",
+    "AssemblyVersion": "1.0.4.0",
     "Author": "HAAAAe1",
     "Punchline": "部队工房潜艇：收取、修理、再出航，多角色自动轮换",
     "Description": "照 DailyRoutines 的顺序重写的潜艇作业插件：进屋 → 航行管制面板 → 逐个确认远航报告 → 读零件耐久、把耐久为 0 的零件修好 → 按原航线再次出航。全部处理完自动切下一个角色（需要 Lifestream）。场景移动用瞬移，不需要 vnavmesh 寻路。",
-    "Changelog": "1.0.3：修「收完不取消」+ 两个小问题。① 收完后列表一直挂在屏幕上：SelectString 这类菜单是游戏事件弹出的，只调 Close(true) 把窗口藏起来，游戏那边仍认为菜单开着，下一帧又摆回来。现在改成和按 ESC 一样，点菜单里的「取消」那一项（找不到就发 -1）走游戏自己的收尾流程；停止/切角色前也会顺手关掉列表，不会再留着窗口。② 进屋后第一下瞬移太快被系统判成「正在加载区域」：进屋和进工房后都先等读图结束，再补 0.5 秒静默期才允许瞬移。③ 刚开始时读不到潜艇：以前「4 个槽位等级都是 0（数据未加载）」被当成「没有待收取的潜艇」，整轮直接收工。现在读不到会等，等不到就改看菜单文字（带「正在探索」的就是还没回来），有数据时依旧按返航时间判断。",
+    "Changelog": "1.0.4：修「收过的潜艇不会再次出发」，也就是只确认、没出发。根因：发回调前只看了窗口的 IsReady，没看 ULD 节点的加载状态。窗口刚弹出时 IsReady 已经是 true、节点却还在加载（UldManager.LoadedState < 3），这时候发出去的「确认」「出发」回调会被游戏静默丢掉——于是报告看着确认了、窗口被我们关掉了，潜艇其实既没收取也没出航；更糟的是被藏掉的报告窗口让游戏卡在「报告还开着」，之后点列表任何一艘都没反应。现在：① 只有 UldManager.LoadedState 到 Loaded 才发回调（等于 DailyRoutines 的 IsAddonAndNodesReady）；② 回调没发出去就绝不隐藏窗口，一直重试；③ 点完出发必须核对返航时间——没跳到未来就说明没走成，重试 3 次，仍不行就明说是哪艘没出航；④ 连续两次点列表都没弹窗口时自动自救：把被藏掉的报告窗口恢复出来确认掉，再重开面板；⑤ 修完零件先等 0.45 秒耐久回写再点出发；青磷水不足 15 直接跳过并说明。/sf debug 现在会打印各窗口节点是否就绪、有没有「存在但不可见」的窗口。",
     "ApplicableVersion": "any",
     "LoadPriority": 0,
     "Tags": [
@@ -24,11 +24,11 @@
     "DalamudApiLevel": 15,
     "AcceptsFeedback": true,
     "IsHide": false,
-    "LastUpdate": 1792859510,
+    "LastUpdate": 1792859934,
     "DownloadCount": 0,
     "RepoUrl": "https://github.com/HAAAAe1/MyPlugins",
-    "DownloadLinkInstall": "https://raw.githubusercontent.com/HAAAAe1/MyPlugins/main/dist/SubFleet-1.0.3.zip",
-    "DownloadLinkUpdate": "https://raw.githubusercontent.com/HAAAAe1/MyPlugins/main/dist/SubFleet-1.0.3.zip"
+    "DownloadLinkInstall": "https://raw.githubusercontent.com/HAAAAe1/MyPlugins/main/dist/SubFleet-1.0.4.zip",
+    "DownloadLinkUpdate": "https://raw.githubusercontent.com/HAAAAe1/MyPlugins/main/dist/SubFleet-1.0.4.zip"
   },
   {
     "Name": "SubOps",

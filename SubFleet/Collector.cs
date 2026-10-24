@@ -64,6 +64,26 @@ public sealed unsafe class Collector
     private int roomFires;
     private DateTime roomFirstFireAt = DateTime.MinValue;
 
+    /// <summary>远航报告确认连续失败次数。</summary>
+    private int resultFires;
+
+    /// <summary>出航页「出发」点了第几次。</summary>
+    private int detailFires;
+    private DateTime detailFiredAt = DateTime.MinValue;
+
+    /// <summary>刚点过出发的潜艇等下要核对（-1 = 没有待核对的）。</summary>
+    private int pendingDepartSlot = -1;
+    private DateTime pendingDepartAt = DateTime.MinValue;
+    private int departFails;
+
+    /// <summary>维修确认完之后等耐久回写的时刻。</summary>
+    private DateTime departSettleAt = DateTime.MinValue;
+
+    /// <summary>上次点潜艇列表项的时间，用来判断「点了没反应」。</summary>
+    private DateTime menuClickAt = DateTime.MinValue;
+    private int quietClicks;
+    private int stuckRecoveries;
+
     /// <summary>「什么都没开」连续等了几拍（给刚关掉的窗口一点时间）。</summary>
     private int idleTicks;
     private int doorTries;
@@ -123,6 +143,16 @@ public sealed unsafe class Collector
         this.pickFires = 0;
         this.roomFires = 0;
         this.roomFirstFireAt = DateTime.MinValue;
+        this.resultFires = 0;
+        this.detailFires = 0;
+        this.detailFiredAt = DateTime.MinValue;
+        this.pendingDepartSlot = -1;
+        this.pendingDepartAt = DateTime.MinValue;
+        this.departFails = 0;
+        this.departSettleAt = DateTime.MinValue;
+        this.menuClickAt = DateTime.MinValue;
+        this.quietClicks = 0;
+        this.stuckRecoveries = 0;
         this.idleTicks = 0;
         this.doorTries = 0;
         this.approachTries = 0;
@@ -247,23 +277,48 @@ public sealed unsafe class Collector
         return true;
     }
 
-    /// <summary>远航报告：点「确认」（callback 1）把奖励收下，等于「真的收完了」。</summary>
+    /// <summary>
+    /// 远航报告：点「确认」（callback 1）把奖励收下，等于「真的收完了」。
+    ///
+    /// 这里有一条铁律：**确认回调没发出去就绝对不许把窗口藏起来**。
+    /// 以前是先 Fire 再无条件 Hide——节点还没加载完时回调会被游戏丢掉，
+    /// 结果窗口被藏了、游戏却认为「报告还开着」：列表挂在屏幕上，
+    /// 之后再点任何一艘艇都毫无反应（游戏在等那个被藏掉的窗口）。
+    /// </summary>
     private bool HandleResult(DateTime now)
     {
         if (!Addons.Shown(Addons.Result))
+        {
+            this.resultFires = 0;
             return false;
+        }
 
-        if ((now - this.resultAt).TotalMilliseconds < 300)
+        if ((now - this.resultAt).TotalMilliseconds < 350)
             return true;
 
         this.resultAt = now;
 
-        if (Addons.Get(Addons.Result) == null)
+        if (!Addons.NodesReady(Addons.Result))
+        {
+            this.SetStatus("远航报告加载中…");
             return true;
+        }
 
-        Addons.Fire(Addons.Result, 1);
+        if (!Addons.Fire(Addons.Result, 1))
+        {
+            this.resultFires++;
+            this.log.Warning($"[SubFleet] 远航报告确认没发出去（第 {this.resultFires} 次），保持窗口等下一拍");
+            this.SetStatus("确认远航报告…");
+            return true;
+        }
+
+        // 回调确实发出去了，才收起窗口
         Addons.Hide(Addons.Result);
+        this.resultFires = 0;
         this.pickFires = 0;
+        this.quietClicks = 0;
+        this.menuClickAt = DateTime.MinValue;
+        this.stuckRecoveries = 0;
         this.Say("确认远航报告");
         return true;
     }
@@ -461,8 +516,14 @@ public sealed unsafe class Collector
             if (this.roomFires == 0)
                 this.roomFirstFireAt = DateTime.UtcNow;
 
+            if (!Addons.Fire(Addons.SelectString, index))
+            {
+                this.SetStatus("房间菜单加载中…");
+                this.Wait(0.25);
+                return false;
+            }
+
             this.roomFires++;
-            Addons.Fire(Addons.SelectString, index);
             this.SetStatus($"进入工房（第 {index + 1} 项）");
 
             // 进工房又是一次读图，同样先别瞬移。
@@ -540,6 +601,10 @@ public sealed unsafe class Collector
 
     private bool StepCollect()
     {
+        // 上一艘点了出发：先核对到底走没走，再继续下一艘
+        if (!this.CheckDepart())
+            return false;
+
         // 出航确认页
         if (Addons.Shown(Addons.Detail))
             return this.HandleDetail();
@@ -697,17 +762,34 @@ public sealed unsafe class Collector
                     entry = Math.Clamp(pending, 0, entries.Count - 1);
             }
 
-            this.selectedIndex = pending;
-            this.selectedName = name;
-            this.expectList = true;
-
-            if (this.pickFires++ > 6)
+            // 点了列表项却一直没有窗口弹出：连续两次就说明游戏那边卡住了
+            // （典型情况是「远航报告」被藏掉了、游戏还以为它开着），先自救再说。
+            if (this.quietClicks >= 2)
             {
-                this.Fail($"点了 6 次「{name}」都没弹出远航报告，菜单项：{string.Join(" | ", entries)}");
+                this.RecoverStuckMenu(entries);
                 return false;
             }
 
-            Addons.Fire(Addons.SelectString, entry);
+            if (this.pickFires++ > 8)
+            {
+                this.Fail($"点了 8 次「{name}」都没弹出窗口，菜单项：{string.Join(" | ", entries)}");
+                return false;
+            }
+
+            if (!Addons.Fire(Addons.SelectString, entry))
+            {
+                // 列表节点还没就绪：这一下不算数，等会再点
+                this.pickFires--;
+                this.SetStatus("潜艇列表加载中…");
+                this.Wait(0.25);
+                return false;
+            }
+
+            this.quietClicks++;
+            this.menuClickAt = DateTime.UtcNow;
+            this.selectedIndex = pending;
+            this.selectedName = name;
+            this.expectList = true;
             this.SetStatus($"选择 {name}（第 {entry + 1} 项）");
             this.Say($"选择 {name}");
             this.Wait(1.6);
@@ -728,11 +810,59 @@ public sealed unsafe class Collector
         if (this.panelMenuFires == 1)
             this.log.Information($"[SubFleet] 面板菜单：{string.Join(" | ", entries)} → 选第 {index + 1} 项");
 
-        Addons.Fire(Addons.SelectString, index);
+        if (!Addons.Fire(Addons.SelectString, index))
+        {
+            // 菜单节点还没加载完：这一下会被游戏丢掉，不能算一次尝试
+            this.panelMenuFires = Math.Max(0, this.panelMenuFires - 1);
+            this.SetStatus("面板菜单加载中…");
+            this.Wait(0.25);
+            return false;
+        }
+
         this.expectList = true;
         this.SetStatus($"进入潜艇列表（{entries[index]}）");
         this.Wait(1.2);
         return false;
+    }
+
+    /// <summary>
+    /// 点了列表项、但游戏一点反应都没有时的自救。
+    ///
+    /// 最常见的成因：之前把「远航报告」藏掉了（IsVisible = false），
+    /// 但游戏那边仍认为报告还开着，于是：
+    ///   · 列表还在屏幕上，怎么点都没反应；
+    ///   · 远航报告也不会再弹（游戏觉得它已经开着）。
+    /// 这时候必须先把报告窗口**恢复出来**并真正确认掉，再重开面板，
+    /// 否则点多少次都是白点。
+    /// </summary>
+    private void RecoverStuckMenu(IReadOnlyList<string> entries)
+    {
+        this.stuckRecoveries++;
+
+        this.log.Warning(
+            $"[SubFleet] 连续 2 次点菜单项都没弹窗口（第 {this.stuckRecoveries} 次自救），"
+            + $"当前菜单：{string.Join(" | ", entries)}");
+
+        if (this.stuckRecoveries > 3)
+        {
+            this.Fail("潜艇列表点了没反应，游戏界面卡住了（手动关一下列表再试）");
+            return;
+        }
+
+        // 把可能被藏掉的远航报告摆回来，交给 HandleResult 正常确认
+        if (Addons.ForceShow(Addons.Result))
+            this.Say("恢复被隐藏的远航报告");
+
+        // 按 ESC 的方式结束这个菜单，然后重开面板
+        Addons.Fire(Addons.SelectString, -1);
+        Addons.Close(Addons.SelectString);
+
+        this.quietClicks = 0;
+        this.menuClickAt = DateTime.MinValue;
+        this.pickFires = 0;
+        this.idleTicks = 4;      // 跳过「等界面」的缓冲，直接去重开面板
+        this.reopenTries++;
+        this.Wait(1.0);
     }
 
     private bool IsSubmarineList(IReadOnlyList<string> entries)
@@ -764,13 +894,16 @@ public sealed unsafe class Collector
     /// <summary>出航确认页：先修再出发。返回 true 只在「没有潜艇可处理了」时才用不到，这里固定 false。</summary>
     private bool HandleDetail()
     {
-        if (!Addons.Ready(Addons.Detail))
+        if (!Addons.NodesReady(Addons.Detail))
         {
+            this.SetStatus("出航页加载中…");
             this.Wait(0.2);
             return false;
         }
 
         this.pickFires = 0;
+        this.quietClicks = 0;
+        this.stuckRecoveries = 0;
 
         var index = this.ResolveIndex();
         if (index < 0)
@@ -788,26 +921,163 @@ public sealed unsafe class Collector
             var state = this.EnsureRepaired(index);
             if (state != RepairState.Ready)
                 return false;
+
+            // 修完别立刻点出发：刚下发过修理命令，游戏还在回写耐久，
+            // 这一拍发出去的出发回调容易被丢掉（「收过但没再次出发」）。
+            if (this.departSettleAt == DateTime.MinValue)
+            {
+                this.departSettleAt = DateTime.UtcNow.AddSeconds(0.45);
+                this.SetStatus("等耐久回写…");
+                this.Wait(0.45);
+                return false;
+            }
+
+            if (DateTime.UtcNow < this.departSettleAt)
+            {
+                this.Wait(0.2);
+                return false;
+            }
         }
 
         if (!this.config.ReDispatch)
         {
-            Addons.Fire(Addons.Detail, -1);
+            if (!Addons.Fire(Addons.Detail, -1))
+            {
+                this.SetStatus("关闭出航页…");
+                this.Wait(0.2);
+                return false;
+            }
+
             Addons.Close(Addons.Detail);
             this.handled.Add(index);
+            this.departSettleAt = DateTime.MinValue;
             this.Say($"{this.SlotName(index)} 已收取（不再次出航）");
             this.Wait(1.5);
             return false;
         }
 
-        Addons.Fire(Addons.Detail, 0);
-        Addons.Close(Addons.Detail);
-        this.handled.Add(index);
-        this.departures++;
-        this.reopenTries = 0;
-        this.Say($"{this.SlotName(index)} 已收取并再次出航");
-        this.Wait(2.0);
+        // 出发：点一次，然后等窗口关。窗口没关就说明这一下没被接受，再点。
+        if (this.detailFires == 0)
+        {
+            var (ceruleum, _) = Workshop.Materials();
+            if (ceruleum is > 0 and < 15)
+            {
+                this.Say($"桶装青磷水只有 {ceruleum} 个（一艇一趟要 15 个），这艘出不了港，跳过。");
+                Addons.Fire(Addons.Detail, -1);
+                Addons.Close(Addons.Detail);
+                this.handled.Add(index);
+                this.departSettleAt = DateTime.MinValue;
+                this.Wait(1.2);
+                return false;
+            }
+
+            if (!Addons.Fire(Addons.Detail, 0))
+            {
+                this.SetStatus("发送出发指令…");
+                this.Wait(0.2);
+                return false;
+            }
+
+            this.detailFires = 1;
+            this.detailFiredAt = DateTime.UtcNow;
+            this.pendingDepartSlot = index;
+            this.pendingDepartAt = DateTime.UtcNow;
+            this.SetStatus($"{this.SlotName(index)} 出发…");
+            this.Wait(0.4);
+            return false;
+        }
+
+        if (Addons.Shown(Addons.Detail))
+        {
+            if ((DateTime.UtcNow - this.detailFiredAt).TotalSeconds < 1.2)
+            {
+                this.Wait(0.2);
+                return false;
+            }
+
+            if (this.detailFires < 3)
+            {
+                this.detailFires++;
+                this.detailFiredAt = DateTime.UtcNow;
+                Addons.Fire(Addons.Detail, 0);
+                this.log.Warning($"[SubFleet] 出发点了 {this.detailFires - 1} 次窗口还没关，再点一次");
+                this.Wait(0.5);
+                return false;
+            }
+
+            this.log.Warning("[SubFleet] 出发 3 次都没被接受，关掉这艘");
+            this.Say($"{this.SlotName(index)} 出发没被游戏接受（青磷水不足或没有航线？），跳过。");
+            Addons.Fire(Addons.Detail, -1);
+            Addons.Close(Addons.Detail);
+            this.handled.Add(index);
+            this.detailFires = 0;
+            this.pendingDepartSlot = -1;
+            this.departSettleAt = DateTime.MinValue;
+            this.Wait(1.5);
+            return false;
+        }
+
+        this.detailFires = 0;
+        this.Wait(0.4);
         return false;
+    }
+
+    /// <summary>
+    /// 出发之后核对结果：返航时间必须跳到未来，否则就是「收过了但没再出发」。
+    ///
+    /// 以前点完出发就直接记成「已出航」，可回调可能被游戏丢掉（窗口没就绪、
+    /// 或者刚好在忙），于是四艘艇全部收完、一艘都没派出去，界面上还写着成功。
+    /// 现在按返航时间核对，没走成会重试，重试还不行就明说哪艘没走成。
+    /// </summary>
+    private bool CheckDepart()
+    {
+        if (this.pendingDepartSlot < 0)
+            return true;
+
+        if ((DateTime.UtcNow - this.pendingDepartAt).TotalSeconds < 2.0)
+        {
+            this.SetStatus("等待出航…");
+            this.Wait(0.3);
+            return false;
+        }
+
+        var slot = this.pendingDepartSlot;
+        this.pendingDepartSlot = -1;
+        this.departSettleAt = DateTime.MinValue;
+        this.detailFires = 0;
+
+        if (!Workshop.TryRead(out var subs, out var diagnostic))
+        {
+            // 读不到就没法核对。不能因此重复点出发——那会白烧燃料。
+            this.handled.Add(slot);
+            this.departures++;
+            this.Say($"{this.SlotName(slot)} 出发指令已发送（{diagnostic}，无法核对）");
+            return true;
+        }
+
+        var sub = subs.FirstOrDefault(x => x.Slot == slot);
+        var exploring = sub.Enabled && sub.ReturnTime > Workshop.Now.AddMinutes(2);
+
+        if (exploring)
+        {
+            this.handled.Add(slot);
+            this.departures++;
+            this.Say($"{this.SlotName(slot)} 已收取并再次出航");
+            return true;
+        }
+
+        this.departFails++;
+        this.log.Warning($"[SubFleet] {slot + 1} 号艇出发没生效（返航时间还是过去），第 {this.departFails} 次");
+        this.Say($"{this.SlotName(slot)} 出发没生效，重试（第 {this.departFails} 次）");
+
+        if (this.departFails >= 3)
+        {
+            this.handled.Add(slot);
+            this.Say($"{this.SlotName(slot)} 出发 3 次都没生效，这艘先跳过。");
+            this.departFails = 0;
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -1036,7 +1306,12 @@ public sealed unsafe class Collector
     private void Succeed()
     {
         this.Outcome = RunOutcome.Success;
-        this.Summary = $"收取 {this.handled.Count} 艘，再次出航 {this.departures} 艘";
+
+        var skipped = this.config.ReDispatch ? Math.Max(0, this.handled.Count - this.departures) : 0;
+        this.Summary = this.config.ReDispatch
+            ? $"收取 {this.handled.Count} 艘，再次出航 {this.departures} 艘" + (skipped > 0 ? $"（{skipped} 艘没走成，见日志）" : string.Empty)
+            : $"收取 {this.handled.Count} 艘";
+
         this.Status = "完成：" + this.Summary;
         this.Say("完成：" + this.Summary);
     }

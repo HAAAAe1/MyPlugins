@@ -252,11 +252,20 @@ public sealed class Plugin : IDalamudPlugin
             }
         }
 
-        var open = new[]
-        {
-            Addons.SelectString, Addons.SelectYesno, Addons.Detail, Addons.Result,
-        }.Where(Addons.Shown).ToList();
+        var watched = new[] { Addons.SelectString, Addons.SelectYesno, Addons.Detail, Addons.Result };
 
+        var open = watched.Where(Addons.Shown).ToList();
         this.chat.Print($"[SubFleet] 当前窗口：{(open.Count == 0 ? "无" : string.Join(", ", open))}");
+
+        // 被藏掉但游戏还认为开着的窗口：点列表没反应时多半是它
+        var hidden = watched.Where(x => Addons.Exists(x) && !Addons.Shown(x)).ToList();
+        if (hidden.Count > 0)
+            this.chat.Print($"[SubFleet] 存在但不可见：{string.Join(", ", hidden)}（点列表没反应就是它卡着）");
+
+        this.chat.Print(
+            "[SubFleet] 节点就绪："
+            + $"列表={Addons.NodesReady(Addons.SelectString)} "
+            + $"出航页={Addons.NodesReady(Addons.Detail)} "
+            + $"报告={Addons.NodesReady(Addons.Result)}");
     }
 }
