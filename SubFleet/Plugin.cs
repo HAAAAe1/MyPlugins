@@ -266,7 +266,7 @@ public sealed class Plugin : IDalamudPlugin
             }
         }
 
-        var watched = new[] { Addons.SelectString, Addons.SelectYesno, Addons.Detail, Addons.Result };
+        var watched = new[] { Addons.SelectString, Addons.SelectYesno, Addons.Detail, Addons.Result, Addons.ChartSelect };
 
         var open = watched.Where(Addons.Shown).ToList();
         this.chat.Print($"[SubFleet] 当前窗口：{(open.Count == 0 ? "无" : string.Join(", ", open))}");

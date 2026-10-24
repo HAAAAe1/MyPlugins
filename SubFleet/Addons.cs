@@ -19,6 +19,13 @@ public static unsafe class Addons
     public const string SelectYesno = "SelectYesno";
     public const string Result = "AirShipExplorationResult";
     public const string Detail = "AirShipExplorationDetail";
+
+    /// <summary>
+    /// 「选择航海图」——航行器没有可复用的上次航线时，点出发会弹这个窗口。
+    /// 它不在收取流程的主线上，出现就说明这艘需要重新选航线，只能退回菜单。
+    /// </summary>
+    public const string ChartSelect = "AirShipExploration";
+
     public const string PartsMenu = "AirShipPartsMenu";
 
     /// <summary>SelectString 的菜单项文字从这个下标开始。</summary>

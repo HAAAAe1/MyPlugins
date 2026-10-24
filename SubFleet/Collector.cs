@@ -68,6 +68,22 @@ public sealed unsafe class Collector
     /// <summary>远航报告确认连续失败次数。</summary>
     private int resultFires;
 
+    /// <summary>远航报告点到第几步：0=还没点，1=已点「再次出发」，2=退回「确认完毕」。</summary>
+    private int resultTry;
+    private DateTime resultFireAt = DateTime.MinValue;
+
+    /// <summary>报告只收下、没能开出航页（那么出航要靠单艘艇菜单里的「出发」）。</summary>
+    private bool collectOnly;
+
+    /// <summary>单艘艇菜单（出发 / 上次的远航报告 / 更换配件 / 修理配件 / 退出）点了第几次。</summary>
+    private int vesselMenuFires;
+
+    /// <summary>这一艘的「上次的远航报告」点过没有。</summary>
+    private bool vesselReportTried;
+
+    /// <summary>「选择航海图」窗口退了几次。</summary>
+    private int chartTries;
+
     /// <summary>出航页「出发」点了第几次。</summary>
     private int detailFires;
     private DateTime detailFiredAt = DateTime.MinValue;
@@ -145,6 +161,12 @@ public sealed unsafe class Collector
         this.roomFires = 0;
         this.roomFirstFireAt = DateTime.MinValue;
         this.resultFires = 0;
+        this.resultTry = 0;
+        this.resultFireAt = DateTime.MinValue;
+        this.collectOnly = false;
+        this.vesselMenuFires = 0;
+        this.vesselReportTried = false;
+        this.chartTries = 0;
         this.detailFires = 0;
         this.detailFiredAt = DateTime.MinValue;
         this.pendingDepartSlot = -1;
@@ -279,20 +301,28 @@ public sealed unsafe class Collector
     }
 
     /// <summary>
-    /// 远航报告：点「确认」（callback 1）把奖励收下，等于「真的收完了」。
+    /// 远航报告：先点「再次出发」（callback 0）——它一次做完「收下奖励 + 开出航确认页」，
+    /// 接下来才能在确认页上修零件、点出发。
     ///
-    /// 这里有一条铁律：**确认回调没发出去就绝对不许把窗口藏起来**。
-    /// 以前是先 Fire 再无条件 Hide——节点还没加载完时回调会被游戏丢掉，
-    /// 结果窗口被藏了、游戏却认为「报告还开着」：列表挂在屏幕上，
-    /// 之后再点任何一艘艇都毫无反应（游戏在等那个被藏掉的窗口）。
+    /// 为什么不是 callback 1：那个是右边的「确认完毕」，只收下奖励、**不会开确认页**。
+    /// 之前一直点 1，于是「收到报告」之后再也没人打开确认页，
+    /// 表现出来就是「收过了但从来不出航」，以及主菜单被当成收工后反复重开。
+    ///
+    /// 保险丝：如果这个客户端上 0 不是「再次出发」，1.5 秒后确认页还没出现，
+    /// 就退回 1 把奖励收下（不能白跑），并记下 collectOnly，稍后用单艘艇菜单里的「出发」补派。
     /// </summary>
     private bool HandleResult(DateTime now)
     {
         if (!Addons.Shown(Addons.Result))
         {
             this.resultFires = 0;
+            this.resultTry = 0;
             return false;
         }
+
+        // 出航确认页已经开了：这里放手，交给 HandleDetail
+        if (Addons.Shown(Addons.Detail))
+            return false;
 
         if ((now - this.resultAt).TotalMilliseconds < 350)
             return true;
@@ -305,22 +335,51 @@ public sealed unsafe class Collector
             return true;
         }
 
-        if (!Addons.Fire(Addons.Result, 1))
+        if (this.resultTry == 0)
         {
-            this.resultFires++;
-            this.log.Warning($"[SubFleet] 远航报告确认没发出去（第 {this.resultFires} 次），保持窗口等下一拍");
-            this.SetStatus("确认远航报告…");
+            if (!Addons.Fire(Addons.Result, 0))
+            {
+                this.resultFires++;
+                this.log.Warning($"[SubFleet] 远航报告「再次出发」没发出去（第 {this.resultFires} 次），保持窗口等下一拍");
+                this.SetStatus("收取并再次出航…");
+                return true;
+            }
+
+            this.resultTry = 1;
+            this.resultFireAt = now;
+            this.Say("确认远航报告并再次出发");
+            this.SetStatus("收取并再次出航…");
             return true;
         }
 
-        // 回调确实发出去了，才收起窗口
+        // 已经点过「再次出发」：给出航页 1.5 秒，没出现就说明这个按钮不是它
+        if (this.resultTry == 1)
+        {
+            if ((now - this.resultFireAt).TotalSeconds < 1.5)
+                return true;
+
+            this.log.Warning("[SubFleet] 点了「再次出发」没开出出航确认页，改点「确认完毕」，稍后用菜单「出发」补派");
+            Addons.Fire(Addons.Result, 1);
+            this.resultTry = 2;
+            this.collectOnly = true;
+            this.resultFireAt = now;
+            this.pickFires = 0;
+            this.quietClicks = 0;
+            this.menuClickAt = DateTime.MinValue;
+            return true;
+        }
+
+        // 走了「确认完毕」这条路：等它关掉，再去菜单里点出发
+        if ((now - this.resultFireAt).TotalSeconds < 1.0)
+            return true;
+
         Addons.Hide(Addons.Result);
+        this.resultTry = 0;
         this.resultFires = 0;
         this.pickFires = 0;
         this.quietClicks = 0;
         this.menuClickAt = DateTime.MinValue;
         this.stuckRecoveries = 0;
-        this.Say("确认远航报告");
         return true;
     }
 
@@ -652,6 +711,11 @@ public sealed unsafe class Collector
         if (!this.CheckDepart())
             return false;
 
+        // 「选择航海图」：这艘没有可复用的上次航线。按用户给的路径——
+        // 先退出去、回到这艘的菜单，再走「上次的远航报告 → 再次出发 → 出发」。
+        if (Addons.Shown(Addons.ChartSelect))
+            return this.HandleChartSelect();
+
         // 出航确认页
         if (Addons.Shown(Addons.Detail))
             return this.HandleDetail();
@@ -732,6 +796,16 @@ public sealed unsafe class Collector
         if (entries.Count == 0)
         {
             this.Wait(0.3);
+            return false;
+        }
+
+        // ① 单艘艇菜单（出发 / 上次的远航报告 / 更换配件 / 修理配件 / 退出）。
+        //    这一层以前完全没写：菜单一出现就被当成「收工」，于是去重开面板，
+        //    一头撞在还开着的窗口上 —— 表现就是状态永远停在「重新打开面板…」。
+        //    注意要放在「潜艇列表」前面判：expectList 刚被置 true，否则会被误判成列表。
+        if (this.IsVesselMenu(entries))
+        {
+            this.HandleVesselMenu(entries);
             return false;
         }
 
@@ -830,6 +904,12 @@ public sealed unsafe class Collector
             this.selectedIndex = pending;
             this.selectedName = name;
             this.expectList = true;
+
+            // 新的一艘：单艘艇菜单/报告/航海图的计数全部归零
+            this.vesselMenuFires = 0;
+            this.vesselReportTried = false;
+            this.chartTries = 0;
+            this.collectOnly = false;
             this.SetStatus($"选择 {name}（第 {entry + 1} 项）");
             this.Say($"选择 {name}");
             this.Wait(1.6);
@@ -864,6 +944,150 @@ public sealed unsafe class Collector
         this.Wait(1.2);
         return false;
     }
+
+    /// <summary>
+    /// 单艘艇菜单：点列表里某一艘之后弹出来的那个菜单
+    /// （出发 / 上次的远航报告 / 更换配件 / 修理配件 / … / 退出）。
+    /// 特征很明确：一定带「出发」或「远航报告」。
+    /// </summary>
+    private bool IsVesselMenu(IReadOnlyList<string> entries)
+        => Addons.FindEntry(entries, "出发", "出航", "Depart") >= 0
+           || Addons.FindEntry(entries, "远航报告", "航海报告", "Report") >= 0;
+
+    /// <summary>
+    /// 单艘艇菜单：先「上次的远航报告」，再「出发」。顺序不能反——
+    /// 只有先把报告收掉，才算这一艘真的收完了（旧插件 SubOps 0.5.x 就是这么走的）。
+    /// </summary>
+    private void HandleVesselMenu(IReadOnlyList<string> entries)
+    {
+        this.idleTicks = 0;
+        this.expectList = false;
+
+        var report = Addons.FindEntry(entries, "上次的远航报告", "远航报告", "航海报告", "Report");
+        var depart = Addons.FindEntry(entries, "出发", "出航", "Depart");
+        var quit = Addons.FindEntry(entries, "退出", "返回", "取消", "Cancel", "Exit");
+
+        // 菜单点太多次还没动静：退出这艘，别把整轮拖死
+        if (this.vesselMenuFires > 8)
+        {
+            if (quit >= 0)
+                Addons.Fire(Addons.SelectString, quit);
+
+            this.MarkCurrentSkipped("菜单里点了 8 次都没反应");
+            this.Wait(1.0);
+            return;
+        }
+
+        // ① 报告：每艘只主动点一次。有报告会弹远航报告窗口（交给 HandleResult），
+        //    没有报告菜单不会变，下一拍直接走 ②。
+        //    已经用「确认完毕」收下过的（collectOnly）就别再点了，直接出发。
+        if (report >= 0 && !this.vesselReportTried && !this.collectOnly)
+        {
+            this.vesselReportTried = true;
+            if (Addons.Fire(Addons.SelectString, report))
+            {
+                this.vesselMenuFires++;
+                this.SetStatus("打开上次的远航报告…");
+                this.Say("打开上次的远航报告");
+                this.Wait(1.4);
+                return;
+            }
+
+            this.vesselReportTried = false;
+            this.SetStatus("潜艇菜单加载中…");
+            this.Wait(0.3);
+            return;
+        }
+
+        // ② 出发：打开出航确认页，真正的「出发」在那边点
+        if (depart >= 0)
+        {
+            if (Addons.Fire(Addons.SelectString, depart))
+            {
+                this.vesselMenuFires++;
+                this.collectOnly = false;
+                this.detailFires = 0;
+                this.departSettleAt = DateTime.MinValue;
+                this.SetStatus("打开出航确认页…");
+                this.Wait(1.4);
+                return;
+            }
+
+            this.SetStatus("潜艇菜单加载中…");
+            this.Wait(0.3);
+            return;
+        }
+
+        // ③ 既没有报告也没有出发：退出这艘
+        if (quit >= 0)
+            Addons.Fire(Addons.SelectString, quit);
+
+        this.Wait(0.8);
+    }
+
+    /// <summary>
+    /// 「选择航海图」（AirShipExploration）。
+    ///
+    /// 这艘艇没有可复用的上次航线，游戏要你重新选一张图。插件不去猜航线——
+    /// 选错一趟就是十几个小时的收成。做法是退出去，回到这艘艇的菜单，
+    /// 再按「上次的远航报告 → 再次出发 → 出发」重走一遍；
+    /// 连退 3 次都退不掉就把这艘标成跳过，绝不让整轮卡在这个窗口上。
+    /// </summary>
+    private bool HandleChartSelect()
+    {
+        this.idleTicks = 0;
+
+        if (this.chartTries >= 3)
+        {
+            this.log.Warning("[SubFleet] 「选择航海图」退不掉，直接关窗并跳过这艘");
+            Addons.Close(Addons.ChartSelect);
+            this.MarkCurrentSkipped("需要手动选航海图");
+            this.Wait(1.0);
+            return false;
+        }
+
+        this.chartTries++;
+
+        // 第一下点「取消 / 退出」（-1 是这类窗口的取消参数），没反应就直接关窗
+        var fired = Addons.Fire(Addons.ChartSelect, -1);
+        if (!fired || this.chartTries >= 2)
+        {
+            Addons.Close(Addons.ChartSelect);
+            this.log.Information("[SubFleet] 「选择航海图」→ 关窗，退回潜艇菜单重走报告/出发");
+        }
+        else
+        {
+            this.Say("「选择航海图」→ 取消，退回潜艇菜单");
+        }
+
+        // 退回菜单后要重新点一次「上次的远航报告」，否则会直接跳到出发
+        this.vesselReportTried = false;
+        this.vesselMenuFires = 0;
+        this.Wait(1.2);
+        return false;
+    }
+
+    /// <summary>把当前这艘记成「跳过」，并在聊天框说明原因。</summary>
+    private void MarkCurrentSkipped(string reason)
+    {
+        var slot = this.selectedIndex >= 0 ? this.selectedIndex : this.ResolveIndex();
+        if (slot < 0)
+            return;
+
+        if (this.handled.Add(slot))
+        {
+            var name = this.SlotName(slot);
+            this.Say($"{name} 跳过：{reason}");
+            this.log.Warning($"[SubFleet] {name}（槽位 {slot}）跳过：{reason}");
+        }
+
+        this.chartTries = 0;
+        this.vesselMenuFires = 0;
+        this.vesselReportTried = false;
+        this.selectedIndex = -1;
+        this.expectList = false;
+    }
+
 
     /// <summary>
     /// 点了列表项、但游戏一点反应都没有时的自救。
@@ -1085,6 +1309,12 @@ public sealed unsafe class Collector
         this.pendingDepartSlot = -1;
         this.departSettleAt = DateTime.MinValue;
         this.detailFires = 0;
+
+        // 这艘处理完了，把「这一艘」的菜单/报告状态清掉，下一艘从头走
+        this.vesselMenuFires = 0;
+        this.vesselReportTried = false;
+        this.chartTries = 0;
+        this.collectOnly = false;
 
         if (!Workshop.TryRead(out var subs, out var diagnostic))
         {

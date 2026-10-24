@@ -16,6 +16,11 @@ public sealed class Ui
 
     private bool open;
 
+    /// <summary>浮动图标按下时的鼠标位置，用来区分「点一下」和「拖走」。</summary>
+    private Vector2 floatPressPos;
+
+    private static readonly Vector2 FloatIconSize = new(52f, 40f);
+
     public Ui(Config config, Collector collector, Sweep sweep, Roster roster, Action save)
     {
         this.config = config;
@@ -31,6 +36,8 @@ public sealed class Ui
 
     public void Draw()
     {
+        this.DrawFloatIcon();
+
         if (!this.open)
             return;
 
@@ -89,10 +96,98 @@ public sealed class Ui
             dirty = true;
         }
 
+        var floatIcon = this.config.ShowFloatIcon;
+        if (ImGui.Checkbox("显示浮动图标（可拖动）", ref floatIcon))
+        {
+            this.config.ShowFloatIcon = floatIcon;
+            dirty = true;
+        }
+
         if (dirty)
             this.save();
 
         ImGui.End();
+    }
+
+    /// <summary>
+    /// 屏幕上那个小图标：不用进卫月设置，点一下就能开关主窗口，拖到哪记到哪。
+    ///
+    /// 用画布自己画，不用 ImGui.Button——按钮会把整块区域吃掉，就没地方按着拖了。
+    /// 判断「点一下」还是「拖走」：按下和松开的位置差 4 像素以内才算点击。
+    /// </summary>
+    private void DrawFloatIcon()
+    {
+        if (!this.config.ShowFloatIcon)
+            return;
+
+        ImGui.SetNextWindowPos(this.config.FloatIconPos, ImGuiCond.FirstUseEver);
+        ImGui.SetNextWindowSize(FloatIconSize, ImGuiCond.Always);
+        ImGui.SetNextWindowBgAlpha(0f);
+
+        const ImGuiWindowFlags flags =
+            ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoScrollbar
+            | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoSavedSettings
+            | ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoNavFocus
+            | ImGuiWindowFlags.NoBringToFrontOnFocus;
+
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, Vector2.Zero);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 0f);
+        var shown = ImGui.Begin("##subfleet-float", flags);
+        ImGui.PopStyleVar(2);
+
+        if (shown)
+        {
+            var p0 = ImGui.GetCursorScreenPos();
+            var p1 = p0 + FloatIconSize;
+            var draw = ImGui.GetWindowDrawList();
+
+            // 配色跟状态走：运行中绿、轮换中蓝、完成灰蓝、待机深灰
+            var fill = this.collector.Running
+                ? new Vector4(0.15f, 0.45f, 0.22f, 0.92f)
+                : this.sweep.Phase is SweepPhase.Running or SweepPhase.Switching
+                    ? new Vector4(0.16f, 0.30f, 0.55f, 0.92f)
+                    : this.sweep.Phase == SweepPhase.Done
+                        ? new Vector4(0.24f, 0.28f, 0.34f, 0.92f)
+                        : new Vector4(0.16f, 0.16f, 0.19f, 0.85f);
+
+            draw.AddRectFilled(p0, p1, ImGui.ColorConvertFloat4ToU32(fill), 6f);
+            draw.AddRect(p0, p1, ImGui.ColorConvertFloat4ToU32(new Vector4(1f, 1f, 1f, 0.18f)), 6f);
+
+            var label = this.open ? "艇 ×" : "艇";
+            var textSize = ImGui.CalcTextSize(label);
+            draw.AddText(p0 + ((FloatIconSize - textSize) * 0.5f), ImGui.ColorConvertFloat4ToU32(new Vector4(1f, 1f, 1f, 0.95f)), label);
+
+            var hovered = ImGui.IsWindowHovered();
+            if (hovered)
+            {
+                draw.AddRect(p0, p1, ImGui.ColorConvertFloat4ToU32(new Vector4(1f, 1f, 1f, 0.55f)), 6f);
+
+                if (ImGui.IsMouseClicked(ImGuiMouseButton.Left))
+                    this.floatPressPos = ImGui.GetMousePos();
+
+                if (ImGui.IsMouseReleased(ImGuiMouseButton.Left)
+                    && Vector2.Distance(this.floatPressPos, ImGui.GetMousePos()) < 4f)
+                    this.open = !this.open;
+
+                if (ImGui.IsMouseClicked(ImGuiMouseButton.Right))
+                    this.collector.Start();
+
+                ImGui.SetTooltip(
+                    (this.collector.Running ? $"SubFleet：{this.collector.Status}" : "SubFleet 潜水艇")
+                    + "\n左键：打开/收起窗口\n右键：收取当前角色\n按住拖动：换位置");
+            }
+        }
+
+        ImGui.End();
+
+        // 拖到哪记到哪（松手时存一次，别每帧写配置）
+        var pos = ImGui.GetWindowPos();
+        if (Vector2.Distance(pos, this.config.FloatIconPos) > 0.5f)
+        {
+            this.config.FloatIconPos = pos;
+            if (ImGui.IsMouseReleased(ImGuiMouseButton.Left))
+                this.save();
+        }
     }
 
     private void DrawStatus()

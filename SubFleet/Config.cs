@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Numerics;
 using Dalamud.Configuration;
 
 namespace SubFleet;
@@ -8,6 +9,14 @@ namespace SubFleet;
 public sealed class Config : IPluginConfiguration
 {
     public int Version { get; set; } = 1;
+
+    // ───────────────────────── 界面 ─────────────────────────
+
+    /// <summary>屏幕上那个可以随便拖的小图标，点一下开关主窗口。</summary>
+    public bool ShowFloatIcon { get; set; } = true;
+
+    /// <summary>图标位置（拖到哪记到哪）。</summary>
+    public Vector2 FloatIconPos { get; set; } = new(60f, 320f);
 
     // ───────────────────────── 收取 ─────────────────────────
 
