@@ -511,26 +511,34 @@ public sealed class Plugin : IDalamudPlugin
     }
 
     /// <summary>调试用：把每艘艇 4 个零件的物品 ID 与耐久打出来，校准容器/槽位用。</summary>
+    /// <summary>
+    /// /subops parts：把 4 个槽位的零件耐久和修理材料打出来。
+    /// 修理不生效时先看这里——耐久是 0 却「没修」，说明是命令没落到位；
+    /// 一条都读不到，说明零件容器没加载。
+    /// </summary>
     private void PrintParts()
     {
-        var any = false;
-        foreach (var sub in Workshop.Read())
+        var (ceruleum, material) = Workshop.ReadMaterials();
+        this.chat.Print($"[SubOps] 工房内={Workshop.InWorkshop}  修理材料={material}  青磷水={ceruleum}");
+
+        if (!Workshop.InWorkshop)
         {
-            if (!sub.Enabled)
-                continue;
-
-            var parts = Workshop.ReadParts(sub.Slot);
-            if (parts.Count == 0)
-                continue;
-
-            any = true;
-            var text = string.Join("  ", parts.Select(p =>
-                $"{p.Slot}号 物品{p.ItemId} 耐久{p.Condition}{(p.Damaged ? "（坏）" : string.Empty)}"));
-            this.chat.Print($"[SubOps] {sub.Slot} 号 {sub.Name}：{text}");
+            this.chat.Print("[SubOps] 不在部队工房，零件数据读不到。");
+            return;
         }
 
-        if (!any)
-            this.chat.Print("[SubOps] 读不到零件数据：需要站在部队工房里运行。");
+        for (var slot = 0; slot < 4; slot++)
+        {
+            if (!Workshop.TryReadParts(slot, out var parts))
+            {
+                this.chat.Print($"  {slot + 1} 号：读不到零件（容器未加载，或该槽位为空）");
+                continue;
+            }
+
+            var text = string.Join("  ", parts.Select(p => $"{p.Slot}号 耐久{p.Condition}{(p.Damaged ? "（坏）" : string.Empty)}"));
+            this.chat.Print($"  {slot + 1} 号：{text}");
+            this.log.Information($"[SubOps/parts] {slot + 1} 号：{text}");
+        }
     }
 
     /// <summary>手动修理。带槽位号（0~3）只修那艘，不带就修所有有坏零件的。</summary>

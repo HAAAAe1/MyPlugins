@@ -183,20 +183,47 @@ public sealed unsafe class Navigator
             if (handler == null)
                 return false;
 
+            // 同一个事件可能挂了好几个物件（每个房间一扇门、几个楼层各一个面板）。
+            // 以前取「第一个」，一旦第一个在别的房间/别的楼层，就会把人瞬移到那边去，
+            // 到了那儿又交互不到，于是换角度再瞬移——看起来就是「一直传送、不收艇」。
+            // 现在改成取「离玩家最近的」那个物件，永远在脚下这一片找。
+            var playerPosition = this.PlayerPosition;
+            var bestPosition = Vector3.Zero;
+            var bestAddress = nint.Zero;
+            var bestId = 0UL;
+            var bestDistance = float.MaxValue;
+
             foreach (var pointer in handler->EventObjects)
             {
                 var go = pointer.Value;
                 if (go == null)
                     continue;
 
-                // 同一个事件可能挂了多个物件（每个房间一扇门），取第一个即可，
-                // 反正都在同一栋房子里。
-                found = new EventObjectRef(go->Position, (ulong)go->GetGameObjectId(), (nint)go, objectCount);
-                return true;
+                // go->Position 是游戏自己的 Vector3，这里显式转一份，
+                // 免得两套 Vector3 的 == 运算符解析不明确。
+                var raw = go->Position;
+                var position = new Vector3(raw.X, raw.Y, raw.Z);
+                if (position == Vector3.Zero)
+                    continue;
+
+                var distance = Vector3.Distance(position, playerPosition);
+                if (distance >= bestDistance)
+                    continue;
+
+                bestDistance = distance;
+                bestPosition = position;
+                bestAddress = (nint)go;
+                bestId = (ulong)go->GetGameObjectId();
             }
 
-            found = new EventObjectRef(Vector3.Zero, 0, 0, objectCount);
-            return false;
+            if (bestAddress == nint.Zero)
+            {
+                found = new EventObjectRef(Vector3.Zero, 0, 0, objectCount);
+                return false;
+            }
+
+            found = new EventObjectRef(bestPosition, bestId, bestAddress, objectCount);
+            return true;
         }
         catch (Exception ex)
         {
@@ -313,6 +340,14 @@ public sealed unsafe class Navigator
             return ApproachState.Blocked;
 
         var pos = player.Position;
+
+        // 已经在交互距离内：一步都不要再挪。
+        // 以前这里会按「玩家相对目标的方向」重新算一个 standOff 外的点，人贴着面板时
+        // 算出来的点可能落在墙里/房间外，下一拍再从新位置重算、又跳一次——
+        // 表现就是「收完一艘以后一直瞬移、不继续收」以及「瞬移出地图」。
+        if (FlatDistance(pos, target) <= DirectInteractRange)
+            return ApproachState.Arrived;
+
         var dx = pos.X - target.X;
         var dz = pos.Z - target.Z;
         var len = MathF.Sqrt((dx * dx) + (dz * dz));
@@ -517,6 +552,19 @@ public sealed unsafe class Navigator
         var dz = a.Z - b.Z;
         return MathF.Sqrt(dx * dx + dz * dz);
     }
+
+    /// <summary>到某点的水平距离（不含高度差）。</summary>
+    public float FlatDistanceTo(Vector3 position)
+    {
+        var player = this.Player;
+        return player == null ? float.MaxValue : FlatDistance(player.Position, position);
+    }
+
+    /// <summary>
+    /// 这个距离以内就算「够得着」，直接交互、一步都不要再挪。
+    /// 面板、房门这类交互点都适用。
+    /// </summary>
+    public const float DirectInteractRange = 3.2f;
 
     private DateTime settleUntil = DateTime.MinValue;
     private Vector3 lastDestination;

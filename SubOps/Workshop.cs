@@ -163,18 +163,27 @@ public static unsafe class Workshop
 
     /// <summary>读取某艘艇的 4 个零件。不在工房、容器未加载时返回空列表。</summary>
     public static List<Part> ReadParts(int submarineSlot)
+        => TryReadParts(submarineSlot, out var parts) ? parts : new List<Part>();
+
+    /// <summary>
+    /// 读取零件，并且**告诉调用方到底读到了没有**。
+    /// 这一点很关键：以前用空列表同时表示「没有零件要修」和「数据没读到」，
+    /// 结果容器没加载时被当成「这艘不用修」，直接把出航点下去了，
+    /// 游戏弹「无法进行出港，需要修理配件」——看起来就是「不会维修潜艇」。
+    /// </summary>
+    public static bool TryReadParts(int submarineSlot, out List<Part> parts)
     {
-        var result = new List<Part>();
+        parts = new List<Part>();
         if (submarineSlot < 0 || submarineSlot > 3)
-            return result;
+            return false;
 
         var manager = InventoryManager.Instance();
         if (manager == null)
-            return result;
+            return false;
 
         var container = manager->GetInventoryContainer((InventoryType)PartsContainerId);
         if (container == null || !container->IsLoaded)
-            return result;
+            return false;
 
         var start = PartsPerSubmarine * submarineSlot;
         for (var i = 0; i < PartSlotCount; i++)
@@ -183,10 +192,10 @@ public static unsafe class Workshop
             if (item == null || item->ItemId == 0)
                 continue;
 
-            result.Add(new Part(i, item->ItemId, item->Condition));
+            parts.Add(new Part(i, item->ItemId, item->Condition));
         }
 
-        return result;
+        return parts.Count > 0;
     }
 
     /// <summary>某艘艇需要修理的零件下标。</summary>

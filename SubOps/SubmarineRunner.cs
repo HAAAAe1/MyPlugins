@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Numerics;
 using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Game.ClientState.Objects.Enums;
 using Dalamud.Game.ClientState.Objects.Types;
@@ -74,6 +75,9 @@ public sealed class SubmarineRunner
 
     /// <summary>当前槽位已经尝试修理的次数，避免修理失败时反复下发命令。</summary>
     private int repairAttempts;
+
+    /// <summary>面板已经点了多少次「交互」但菜单没出来。</summary>
+    private int panelFires;
 
     /// <summary>传送回房屋的重试次数，防止没有部队房屋时死循环。</summary>
     private int teleportAttempts;
@@ -476,17 +480,18 @@ public sealed class SubmarineRunner
             this.roomEventAttempts = 0;
             this.useBruteDoors = false;
 
-            if (this.nav.Distance3D(room.Position) > 1.6f)
+            if (this.nav.FlatDistanceTo(room.Position) > Navigator.DirectInteractRange)
             {
                 this.StatusText = "瞬移到房间切换点…";
 
-                switch (this.nav.ApproachPosition(room.Position, 1.2f))
+                switch (this.nav.ApproachStand(room.Position, 1.6f, this.panelAttempts))
                 {
                     case ApproachState.TooFar:
                         this.Fail("离房间切换点太远，先传送回部队房屋。");
                         return;
                     case ApproachState.Blocked:
-                        this.Fail("房间切换点过不去。");
+                        this.panelAttempts++;
+                        this.Delay(0.3);
                         return;
                 }
 
@@ -602,35 +607,16 @@ public sealed class SubmarineRunner
         if (AddonHelper.IsShown(this.gui, AddonHelper.SelectString))
         {
             this.panelAttempts = 0;
+            this.panelFires = 0;
             this.SetStage(RunnerStage.Collect, 0);
             return;
         }
 
-        // 和进屋同一个思路：按事件 ID 找面板物件，走到面板前的地面再点开。
+        // 和进屋同一个思路：按事件 ID 找面板物件（多个物件时取离自己最近的那个）。
         if (this.nav.TryFindEventObject(PanelEventId, out var panel))
         {
             this.lookupRetries = 0;
-
-            if (this.panelAttempts > 7)
-            {
-                this.Fail("面板点了 8 次都没开。可能站位被家具挡住，先手动站到面板前再 /subops run。");
-                return;
-            }
-
-            // 站到面板前 2.2 米处（每次失败换个 90° 角度）。
-            // 不要直接瞬移到面板坐标：面板的 Y 在柜面高度，人会站到柜台上，
-            // 交互反而打不开——这就是「瞬移到柜台里、面板打不开」的原因。
-            if (this.nav.ApproachStand(panel.Position, 2.2f, this.panelAttempts) != ApproachState.Arrived)
-            {
-                this.StatusText = "走到航行管制面板前…";
-                this.Delay(0.25);
-                return;
-            }
-
-            this.nav.InteractRaw(panel.Address);
-            this.panelAttempts++;
-            this.StatusText = "打开航行管制面板…";
-            this.SetStage(RunnerStage.Collect, 1.2);
+            this.InteractPanel(panel.Position, () => this.nav.InteractRaw(panel.Address));
             return;
         }
 
@@ -651,18 +637,53 @@ public sealed class SubmarineRunner
         }
 
         this.lookupRetries = 0;
+        this.InteractPanel(named.Position, () => this.nav.Interact(named));
+    }
 
-        if (this.nav.ApproachStand(named.Position, 2.2f, this.panelAttempts) != ApproachState.Arrived)
+    /// <summary>
+    /// 打开面板：**已经在交互距离内就只点、不瞬移**。
+    ///
+    /// 以前是无条件 ApproachStand(2.2 米)，而那个 2.2 米点是按「玩家相对面板的方向」
+    /// 现算的。收完一艘以后人就贴在面板边上，算出来的落点经常在墙里/房间外，
+    /// 于是每一拍都瞬移一次、围着面板转圈——既不会继续收下一艘，看起来也像在传送出地图。
+    /// </summary>
+    private void InteractPanel(Vector3 panelPosition, Func<bool> interact)
+    {
+        var flat = this.nav.FlatDistanceTo(panelPosition);
+
+        if (flat <= Navigator.DirectInteractRange)
         {
-            this.StatusText = "走到航行管制面板前…";
-            this.Delay(0.25);
+            // 到位了：只点。点不开就等一拍再点，绝不换角度瞬移。
+            if (this.panelFires >= 8)
+            {
+                this.Fail("面板点了 8 次都没弹菜单。可能界面被别的插件挡住，先手动打开一次再 /subops run。");
+                return;
+            }
+
+            this.panelFires++;
+            interact();
+            this.StatusText = $"打开航行管制面板…（第 {this.panelFires} 次）";
+            this.SetStage(RunnerStage.Collect, 1.2);
             return;
         }
 
-        this.nav.Interact(named);
-        this.panelAttempts++;
-        this.StatusText = "打开航行管制面板…";
-        this.SetStage(RunnerStage.Collect, 1.2);
+        if (this.panelAttempts >= 4)
+        {
+            this.Fail($"离面板还有 {flat:F1} 米，走不过去（可能被家具挡住）。先手动站到面板前再 /subops run。");
+            return;
+        }
+
+        this.StatusText = $"走到航行管制面板前…（{flat:F1} 米）";
+        var state = this.nav.ApproachStand(panelPosition, 2.2f, this.panelAttempts);
+
+        if (state == ApproachState.Blocked || state == ApproachState.TooFar)
+        {
+            this.panelAttempts++;
+            this.Delay(0.3);
+            return;
+        }
+
+        this.Delay(0.25);
     }
 
     /// <summary>
@@ -731,6 +752,23 @@ public sealed class SubmarineRunner
         {
             if (this.config.AutoRepair && this.TryRepairParts())
                 return;
+
+            // 修完还要再确认一次：只要还有坏零件就**绝对不能**点「出发」，
+            // 游戏会弹「无法进行出港，需要修理配件」，而我们却把这艘记成已处理——
+            // 这就是「不会修理、直接跳过」的由来。
+            if (this.config.AutoRepair && this.currentSlot is >= 0 and < 4)
+            {
+                if (Workshop.TryReadParts(this.currentSlot, out var parts)
+                    && parts.Any(x => x.Damaged))
+                {
+                    var left = parts.Count(x => x.Damaged);
+                    this.Say($"{this.currentSlot + 1} 号艇还有 {left} 个零件损坏、修不上，这艘先跳过。");
+                    AddonHelper.Close(this.gui, AddonHelper.ExplorationDetail);
+                    this.MarkSlotDone(this.currentSlot, "零件损坏未能修理，已跳过");
+                    this.Delay(1.2);
+                    return;
+                }
+            }
 
             if (!this.config.ReDispatch)
             {
@@ -829,35 +867,77 @@ public sealed class SubmarineRunner
     }
 
     /// <summary>
-    /// 在详情页里修损坏零件。用的是游戏的 RepairSubmarinePart(1153) 命令，
-    /// 和 DailyRoutines 完全一致：不需要手动选中部位、也不需要打开配件菜单。
-    /// 返回 true 表示「本次做了修理，等窗口刷新后再继续」。
+    /// 修理损坏零件。底层走游戏的 RepairSubmarinePart(1153)，参数是
+    /// (潜艇槽位, 零件下标)，和 DailyRoutines 一致：不用点界面、不用选部位。
+    ///
+    /// 这里把 **4 个槽位的坏零件全修**，而不是只修「当前这艘」：
+    /// 我们手上的 currentSlot 是「菜单里的第几行」，游戏内部的当前潜艇索引未必对得上；
+    /// 一旦错位，命令就落到另一艘艇上，眼前这艘还是坏的，点出发必然被拒。
+    /// 反正这四艘接下来都要派出去，顺手全修掉最省事，代价只是多花几个修理材料。
     /// </summary>
     private bool TryRepairParts()
     {
-        if (this.currentSlot < 0 || this.repairAttempts >= 8)
+        if (this.repairAttempts >= 12)
             return false;
 
-        var damaged = Workshop.DamagedPartSlots(this.currentSlot);
-        if (damaged.Count == 0)
-            return false;
+        var order = this.currentSlot is >= 0 and < 4
+            ? new[] { this.currentSlot, (this.currentSlot + 1) % 4, (this.currentSlot + 2) % 4, (this.currentSlot + 3) % 4 }
+            : new[] { 0, 1, 2, 3 };
 
-        var (_, repairMaterial) = Workshop.ReadMaterials();
-        if (repairMaterial <= 0)
+        var pending = new List<(int Slot, int Part)>();
+        var anyData = false;
+
+        foreach (var slot in order)
         {
-            if (this.repairAttempts == 0)
-                this.Say("修理材料用完了，这次跳过修理。");
-            this.repairAttempts = 8;
+            if (!Workshop.TryReadParts(slot, out var parts))
+                continue;
+
+            anyData = true;
+            foreach (var part in parts.Where(x => x.Damaged))
+                pending.Add((slot, part.Slot));
+        }
+
+        // 零件容器还没加载（刚开窗口那一两帧）：等两拍，别当成「不用修」。
+        if (!anyData)
+        {
+            if (this.repairAttempts < 3)
+            {
+                this.repairAttempts++;
+                this.StatusText = "读取潜水艇零件…";
+                this.Delay(0.4);
+                return true;
+            }
+
+            this.repairAttempts = 12;
+            this.Say("读不到潜水艇零件数据，这一艘不修理了。");
             return false;
         }
 
-        // 和 DR 一样一次性把待修部位全发出去，下一轮再看还有没有剩的。
-        foreach (var part in damaged)
-            Workshop.RepairPart(this.currentSlot, part);
+        if (pending.Count == 0)
+            return false;
+
+        var (_, material) = Workshop.ReadMaterials();
+        if (material <= 0)
+        {
+            this.Say("「魔导机械修理材料」用完了，这一艘修不了。");
+            this.repairAttempts = 12;
+            return false;
+        }
+
+        var sent = 0;
+        foreach (var (slot, part) in pending)
+        {
+            if (sent >= material)
+                break;
+
+            if (Workshop.RepairPart(slot, part))
+                sent++;
+        }
 
         this.repairAttempts++;
-        this.StatusText = $"修理 {this.currentSlot + 1} 号艇（{damaged.Count} 个零件）…";
-        this.Delay(1.5);
+        this.StatusText = $"修理潜水艇零件（{sent} 个）…";
+        this.Say($"修理：下发 {sent} 条命令（共 {pending.Count} 个零件损坏，材料 {material}，第 {this.repairAttempts} 次）");
+        this.Delay(1.2);
         return true;
     }
 
