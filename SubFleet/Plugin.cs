@@ -197,15 +197,16 @@ public sealed class Plugin : IDalamudPlugin
         }
 
         var now = DateTime.UtcNow;
-        foreach (var entry in this.config.Roster)
+        for (var i = 0; i < this.config.Roster.Count; i++)
         {
+            var entry = this.config.Roster[i];
             var state = !entry.Enabled
                 ? "停用"
                 : entry.OnCooldown(now)
                     ? $"冷却到 {CharacterEntry.FromUnix(entry.CooldownUntil).ToLocalTime():HH:mm}"
                     : $"下次返航 {(entry.NextReturn()?.ToLocalTime().ToString("MM-dd HH:mm") ?? "—")}";
 
-            this.chat.Print($"[SubFleet] {(entry.Enabled ? "●" : "○")} {entry.Key}  {state}");
+            this.chat.Print($"[SubFleet] {i + 1}. {(entry.Enabled ? "●" : "○")} {entry.Key}  {state}");
         }
     }
 

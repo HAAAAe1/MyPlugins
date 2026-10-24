@@ -2,11 +2,11 @@
   {
     "Name": "SubFleet",
     "InternalName": "SubFleet",
-    "AssemblyVersion": "1.0.4.0",
+    "AssemblyVersion": "1.0.5.0",
     "Author": "HAAAAe1",
     "Punchline": "部队工房潜艇：收取、修理、再出航，多角色自动轮换",
     "Description": "照 DailyRoutines 的顺序重写的潜艇作业插件：进屋 → 航行管制面板 → 逐个确认远航报告 → 读零件耐久、把耐久为 0 的零件修好 → 按原航线再次出航。全部处理完自动切下一个角色（需要 Lifestream）。场景移动用瞬移，不需要 vnavmesh 寻路。",
-    "Changelog": "1.0.4：修「收过的潜艇不会再次出发」，也就是只确认、没出发。根因：发回调前只看了窗口的 IsReady，没看 ULD 节点的加载状态。窗口刚弹出时 IsReady 已经是 true、节点却还在加载（UldManager.LoadedState < 3），这时候发出去的「确认」「出发」回调会被游戏静默丢掉——于是报告看着确认了、窗口被我们关掉了，潜艇其实既没收取也没出航；更糟的是被藏掉的报告窗口让游戏卡在「报告还开着」，之后点列表任何一艘都没反应。现在：① 只有 UldManager.LoadedState 到 Loaded 才发回调（等于 DailyRoutines 的 IsAddonAndNodesReady）；② 回调没发出去就绝不隐藏窗口，一直重试；③ 点完出发必须核对返航时间——没跳到未来就说明没走成，重试 3 次，仍不行就明说是哪艘没出航；④ 连续两次点列表都没弹窗口时自动自救：把被藏掉的报告窗口恢复出来确认掉，再重开面板；⑤ 修完零件先等 0.45 秒耐久回写再点出发；青磷水不足 15 直接跳过并说明。/sf debug 现在会打印各窗口节点是否就绪、有没有「存在但不可见」的窗口。",
+    "Changelog": "1.0.5：名册可以自己排顺序了——每行前面加了 ↑ ↓ 按钮，另外有「按返航时间排序」（返航时间近的排前面，还没进过工房的排最后）和「当前角色置顶」两个一键按钮。顺序就是轮换顺序。排序时会认准「当前正在处理的那个角色」，改完把轮换游标挪回原位置，不会因为中途挪动而漏掉某个角色、也不会把同一个角色来回处理两遍。/sf char 也会带序号显示，方便对上界面里的顺序。",
     "ApplicableVersion": "any",
     "LoadPriority": 0,
     "Tags": [
@@ -24,11 +24,11 @@
     "DalamudApiLevel": 15,
     "AcceptsFeedback": true,
     "IsHide": false,
-    "LastUpdate": 1792859934,
+    "LastUpdate": 1792860136,
     "DownloadCount": 0,
     "RepoUrl": "https://github.com/HAAAAe1/MyPlugins",
-    "DownloadLinkInstall": "https://raw.githubusercontent.com/HAAAAe1/MyPlugins/main/dist/SubFleet-1.0.4.zip",
-    "DownloadLinkUpdate": "https://raw.githubusercontent.com/HAAAAe1/MyPlugins/main/dist/SubFleet-1.0.4.zip"
+    "DownloadLinkInstall": "https://raw.githubusercontent.com/HAAAAe1/MyPlugins/main/dist/SubFleet-1.0.5.zip",
+    "DownloadLinkUpdate": "https://raw.githubusercontent.com/HAAAAe1/MyPlugins/main/dist/SubFleet-1.0.5.zip"
   },
   {
     "Name": "SubOps",

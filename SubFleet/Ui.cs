@@ -152,28 +152,94 @@ public sealed class Ui
     private bool DrawRoster()
     {
         var dirty = false;
+        var list = this.config.Roster;
 
-        ImGui.TextColored(new Vector4(0.55f, 0.8f, 1f, 1f), $"名册（{this.config.EnabledCount}/{this.config.Roster.Count} 启用）");
+        ImGui.TextColored(new Vector4(0.55f, 0.8f, 1f, 1f), $"名册（{this.config.EnabledCount}/{list.Count} 启用）");
+        ImGui.SameLine();
+        ImGui.TextDisabled("顺序 = 轮换顺序");
 
-        if (this.config.Roster.Count == 0)
+        if (list.Count == 0)
         {
             ImGui.TextDisabled("还没有角色。用每个角色登录一次就会自动入册。");
             return false;
         }
 
-        if (!ImGui.BeginTable("subfleet-roster", 3, ImGuiTableFlags.RowBg | ImGuiTableFlags.Borders))
-            return false;
+        // 一键排序：返航时间近的排前面；还没进过工房的排最后（没数据，无从判断）
+        if (ImGui.SmallButton("按返航时间排序"))
+        {
+            this.SortByReturn();
+            dirty = true;
+        }
 
+        ImGui.SameLine();
+
+        var selfIndex = this.roster.Current == null ? -1 : list.FindIndex(x => x.ContentId == this.roster.Current.ContentId);
+        if (selfIndex <= 0)
+            ImGui.BeginDisabled();
+
+        if (ImGui.SmallButton("当前角色置顶") && selfIndex > 0)
+        {
+            this.MoveEntry(selfIndex, 0);
+            dirty = true;
+        }
+
+        if (selfIndex <= 0)
+            ImGui.EndDisabled();
+
+        if (!ImGui.BeginTable("subfleet-roster", 4, ImGuiTableFlags.RowBg | ImGuiTableFlags.Borders))
+            return dirty;
+
+        ImGui.TableSetupColumn("次序", ImGuiTableColumnFlags.WidthFixed, 52);
         ImGui.TableSetupColumn("角色", ImGuiTableColumnFlags.WidthStretch);
         ImGui.TableSetupColumn("启用", ImGuiTableColumnFlags.WidthFixed, 46);
         ImGui.TableSetupColumn("状态", ImGuiTableColumnFlags.WidthStretch);
         ImGui.TableHeadersRow();
 
         var now = DateTime.UtcNow;
+        var moveFrom = -1;
+        var moveTo = -1;
 
-        foreach (var entry in this.config.Roster)
+        for (var i = 0; i < list.Count; i++)
         {
+            var entry = list[i];
             ImGui.TableNextRow();
+
+            ImGui.TableNextColumn();
+            ImGui.PushID(i);
+
+            if (i == 0)
+                ImGui.BeginDisabled();
+
+            if (ImGui.ArrowButton("##up", ImGuiDir.Up))
+            {
+                moveFrom = i;
+                moveTo = i - 1;
+            }
+
+            if (i == 0)
+                ImGui.EndDisabled();
+
+            if (ImGui.IsItemHovered() && i > 0)
+                ImGui.SetTooltip("上移（越靠前越先轮换到）");
+
+            ImGui.SameLine();
+
+            if (i == list.Count - 1)
+                ImGui.BeginDisabled();
+
+            if (ImGui.ArrowButton("##down", ImGuiDir.Down))
+            {
+                moveFrom = i;
+                moveTo = i + 1;
+            }
+
+            if (i == list.Count - 1)
+                ImGui.EndDisabled();
+
+            if (ImGui.IsItemHovered() && i < list.Count - 1)
+                ImGui.SetTooltip("下移");
+
+            ImGui.PopID();
 
             ImGui.TableNextColumn();
             var isCurrent = this.roster.Current?.ContentId == entry.ContentId;
@@ -192,7 +258,77 @@ public sealed class Ui
         }
 
         ImGui.EndTable();
+
+        // 改列表要等表格画完再做，否则会在遍历中途改集合
+        if (moveFrom >= 0 && moveTo >= 0 && moveTo < list.Count)
+        {
+            this.MoveEntry(moveFrom, moveTo);
+            dirty = true;
+        }
+
         return dirty;
+    }
+
+    /// <summary>
+    /// 移动名册里的一项。轮换进度是按下标记的（<see cref="Config.SweepCursor"/>），
+    /// 所以动完必须把游标挪回原来那个角色，否则中途排序会把正在跑的角色跳过去或者重来一遍。
+    /// </summary>
+    private void MoveEntry(int from, int to)
+    {
+        var list = this.config.Roster;
+        if (from < 0 || from >= list.Count || to < 0 || to >= list.Count || from == to)
+            return;
+
+        var cursorCid = this.CursorContentId();
+
+        var moved = list[from];
+        list.RemoveAt(from);
+        list.Insert(to, moved);
+
+        this.RestoreCursor(cursorCid);
+        this.save();
+    }
+
+    private void SortByReturn()
+    {
+        var list = this.config.Roster;
+        var cursorCid = this.CursorContentId();
+
+        var ordered = list
+            .Select((entry, index) => (entry, index))
+            .OrderBy(x => x.entry.NextReturn()?.Ticks ?? long.MaxValue)
+            .ThenBy(x => x.index)
+            .Select(x => x.entry)
+            .ToList();
+
+        list.Clear();
+        list.AddRange(ordered);
+
+        this.RestoreCursor(cursorCid);
+        this.save();
+    }
+
+    private ulong CursorContentId()
+    {
+        var list = this.config.Roster;
+        if (this.config.SweepCursor < 0 || this.config.SweepCursor >= list.Count)
+            return 0;
+
+        return list[this.config.SweepCursor].ContentId;
+    }
+
+    private void RestoreCursor(ulong cursorCid)
+    {
+        var list = this.config.Roster;
+
+        if (cursorCid != 0)
+        {
+            var index = list.FindIndex(x => x.ContentId == cursorCid);
+            if (index >= 0)
+                this.config.SweepCursor = index;
+        }
+
+        this.config.SweepCursor = Math.Clamp(this.config.SweepCursor, 0, list.Count);
     }
 
     private string Describe(CharacterEntry entry, DateTime now)
